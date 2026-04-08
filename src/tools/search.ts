@@ -84,7 +84,7 @@ Examples:
           if (pkg.links?.repository)
             lines.push(`**Repository:** ${pkg.links.repository}`);
           lines.push(
-            `**Score:** overall=${(score.final * 100).toFixed(0)}% quality=${(score.detail.quality * 100).toFixed(0)}% popularity=${(score.detail.popularity * 100).toFixed(0)}% maintenance=${(score.detail.maintenance * 100).toFixed(0)}%`
+            `**Score:** overall=${score.final.toFixed(1)} quality=${(score.detail.quality * 100).toFixed(0)}% popularity=${(score.detail.popularity * 100).toFixed(0)}% maintenance=${(score.detail.maintenance * 100).toFixed(0)}%`
           );
           lines.push(`**Published:** ${pkg.date}`);
           lines.push("");
