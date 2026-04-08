@@ -144,7 +144,7 @@ export function extractGitHubRepo(
   if (!url) return null;
 
   const match = url.match(
-    /(?:^|\/\/|@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
+    /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
   );
   if (!match) return null;
 
