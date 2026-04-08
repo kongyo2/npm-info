@@ -1,5 +1,5 @@
 {
-  "name": "npm-info-mcp-server",
+  "name": "@kongyo2/npm-info-mcp-server",
   "version": "1.0.0",
   "description": "MCP server that provides npm package information for AI agents during TypeScript development",
   "type": "module",
@@ -7,6 +7,9 @@
   "bin": {
     "npm-info-mcp-server": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
@@ -17,7 +20,24 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "tsc --noEmit && oxlint --silent && prettier --check .",
-    "check:file": "oxlint"
+    "check:file": "oxlint",
+    "prepublishOnly": "npm run clean && npm run build && npm run lint:strict && npm run format:check"
+  },
+  "keywords": [
+    "mcp",
+    "npm",
+    "model-context-protocol",
+    "ai",
+    "typescript"
+  ],
+  "author": "kongyo2",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kongyo2/npm-info.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18"

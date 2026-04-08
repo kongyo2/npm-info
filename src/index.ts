@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerSearchTool } from "./tools/search.js";
@@ -10,9 +11,13 @@ import { registerReadmeTool } from "./tools/readme.js";
 import { registerTypesCheckTool } from "./tools/types-check.js";
 import { registerScoreTool } from "./tools/score.js";
 
+const { version } = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8")
+) as { version: string };
+
 const server = new McpServer({
   name: "npm-info-mcp-server",
-  version: "1.0.0",
+  version,
 });
 
 registerSearchTool(server);
