@@ -1,5 +1,7 @@
 # @kongyo2/npm-info-mcp-server
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kongyo2/npm-info)
+
 MCP server that provides npm package information for AI agents during TypeScript development.
 
 npm パッケージ情報を提供する MCP サーバー。AI エージェントが TypeScript 開発中に npm レジストリを参照できます。
