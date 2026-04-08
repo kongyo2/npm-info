@@ -1,6 +1,7 @@
 import {
   NPM_REGISTRY_URL,
   NPMS_API_URL,
+  GITHUB_API_URL,
   DEFAULT_REQUEST_TIMEOUT,
   PACKAGE_NAME_REGEX,
 } from "../constants.js";
@@ -130,4 +131,41 @@ export async function checkDefinitelyTyped(
   throw new Error(
     `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
   );
+}
+
+export function extractGitHubRepo(
+  repository: NpmRegistryResponse["repository"]
+): { owner: string; repo: string } | null {
+  if (!repository) return null;
+
+  const url = typeof repository === "string" ? repository : repository.url;
+  if (!url) return null;
+
+  const match = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
+  if (!match) return null;
+
+  return { owner: match[1], repo: match[2] };
+}
+
+export async function fetchGitHubReadme(
+  owner: string,
+  repo: string
+): Promise<string | null> {
+  const url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_REQUEST_TIMEOUT);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github.raw+json",
+      },
+    });
+    if (!response.ok) return null;
+    return await response.text();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

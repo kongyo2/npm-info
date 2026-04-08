@@ -1,5 +1,6 @@
 export const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 export const NPMS_API_URL = "https://api.npms.io/v2";
+export const GITHUB_API_URL = "https://api.github.com";
 export const CHARACTER_LIMIT = 25000;
 export const DEFAULT_REQUEST_TIMEOUT = 15000;
 export const DEFAULT_SEARCH_LIMIT = 10;
