@@ -167,7 +167,7 @@ export async function fetchGitHubReadme(
 ): Promise<string | null> {
   let url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
   if (directory) {
-    url += `?dir=${encodeURIComponent(directory)}`;
+    url += `/${directory.split("/").map(encodeURIComponent).join("/")}`;
   }
   try {
     const response = await fetchWithTimeout(url, DEFAULT_REQUEST_TIMEOUT, {
