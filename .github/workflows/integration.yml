@@ -41,6 +41,9 @@ jobs:
       - name: Call npm_package_dependencies
         run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_dependencies --tool-arg package_name=express
 
+      - name: Call npm_package_readme
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_readme --tool-arg package_name=express
+
       - name: Call npm_package_types
         run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_types --tool-arg package_name=express
 

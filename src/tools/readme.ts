@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageMetadata } from "../services/npm-api.js";
+import {
+  fetchPackageMetadata,
+  extractGitHubRepo,
+  fetchGitHubReadme,
+} from "../services/npm-api.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 
 const ReadmeInputSchema = {
@@ -40,7 +44,25 @@ Examples:
       try {
         const metadata = await fetchPackageMetadata(package_name);
 
-        if (!metadata.readme || metadata.readme === "ERROR: No README data found!") {
+        let readmeContent = metadata.readme;
+        let source = "npm";
+
+        if (!readmeContent || readmeContent === "ERROR: No README data found!") {
+          const ghRepo = extractGitHubRepo(metadata.repository);
+          if (ghRepo) {
+            const ghReadme = await fetchGitHubReadme(
+              ghRepo.owner,
+              ghRepo.repo,
+              ghRepo.directory
+            );
+            if (ghReadme) {
+              readmeContent = ghReadme;
+              source = "github";
+            }
+          }
+        }
+
+        if (!readmeContent || readmeContent === "ERROR: No README data found!") {
           return {
             content: [
               {
@@ -51,7 +73,7 @@ Examples:
           };
         }
 
-        let readme = metadata.readme;
+        let readme = readmeContent;
         let truncated = false;
 
         if (readme.length > CHARACTER_LIMIT) {
@@ -61,9 +83,16 @@ Examples:
 
         const lines: string[] = [`# README: ${package_name}`, ""];
 
+        if (source === "github") {
+          lines.push(
+            `> **Note:** README fetched from GitHub repository as npm registry had no README data.`,
+            ""
+          );
+        }
+
         if (truncated) {
           lines.push(
-            `> **Note:** README truncated from ${metadata.readme.length} to ${CHARACTER_LIMIT} characters.`,
+            `> **Note:** README truncated from ${readmeContent.length} to ${CHARACTER_LIMIT} characters.`,
             ""
           );
         }

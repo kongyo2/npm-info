@@ -1,6 +1,7 @@
 import {
   NPM_REGISTRY_URL,
   NPMS_API_URL,
+  GITHUB_API_URL,
   DEFAULT_REQUEST_TIMEOUT,
   PACKAGE_NAME_REGEX,
 } from "../constants.js";
@@ -27,14 +28,15 @@ function encodePackageName(name: string): string {
 
 async function fetchWithTimeout(
   url: string,
-  timeout: number = DEFAULT_REQUEST_TIMEOUT
+  timeout: number = DEFAULT_REQUEST_TIMEOUT,
+  headers: Record<string, string> = { Accept: "application/json" }
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { Accept: "application/json" },
+      headers,
     });
     return response;
   } finally {
@@ -130,4 +132,51 @@ export async function checkDefinitelyTyped(
   throw new Error(
     `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
   );
+}
+
+export function extractGitHubRepo(
+  repository: NpmRegistryResponse["repository"]
+): { owner: string; repo: string; directory?: string } | null {
+  if (!repository) return null;
+
+  const repoObj = typeof repository === "string" ? null : repository;
+  const url = typeof repository === "string" ? repository : repository.url;
+  if (!url) return null;
+
+  const match = url.match(
+    /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
+  );
+  if (!match) return null;
+
+  const result: { owner: string; repo: string; directory?: string } = {
+    owner: match[1],
+    repo: match[2],
+  };
+
+  if (repoObj?.directory) {
+    result.directory = repoObj.directory;
+  }
+
+  return result;
+}
+
+export async function fetchGitHubReadme(
+  owner: string,
+  repo: string,
+  directory?: string
+): Promise<string | null> {
+  let url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
+  if (directory) {
+    url += `/${directory.split("/").map(encodeURIComponent).join("/")}`;
+  }
+  try {
+    const response = await fetchWithTimeout(url, DEFAULT_REQUEST_TIMEOUT, {
+      Accept: "application/vnd.github.raw",
+      "User-Agent": "npm-info-mcp-server",
+    });
+    if (!response.ok) return null;
+    return await response.text();
+  } catch {
+    return null;
+  }
 }
