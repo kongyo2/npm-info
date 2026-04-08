@@ -1,0 +1,48 @@
+name: Integration Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  inspector:
+    name: MCP Inspector CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: List tools
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/list
+
+      - name: Call npm_search
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_search --tool-arg query=express
+
+      - name: Call npm_package_info
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_info --tool-arg package_name=express
+
+      - name: Call npm_package_versions
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_versions --tool-arg package_name=express
+
+      - name: Call npm_package_dependencies
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_dependencies --tool-arg package_name=express
+
+      - name: Call npm_package_types
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_types --tool-arg package_name=express
+
+      - name: Call npm_package_score
+        run: npx @modelcontextprotocol/inspector --cli node dist/index.js --method tools/call --tool-name npm_package_score --tool-arg package_name=express
