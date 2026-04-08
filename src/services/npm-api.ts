@@ -119,14 +119,15 @@ export async function checkDefinitelyTyped(
     ? `@types/${packageName.slice(1).replace("/", "__")}`
     : `@types/${packageName}`;
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(typesName)}/latest`;
-  try {
-    const response = await fetchWithTimeout(url, 5000);
-    if (response.ok) {
-      const data = (await response.json()) as NpmPackageVersion;
-      return { exists: true, version: data.version };
-    }
-    return { exists: false };
-  } catch {
+  const response = await fetchWithTimeout(url, 5000);
+  if (response.ok) {
+    const data = (await response.json()) as NpmPackageVersion;
+    return { exists: true, version: data.version };
+  }
+  if (response.status === 404) {
     return { exists: false };
   }
+  throw new Error(
+    `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
+  );
 }
