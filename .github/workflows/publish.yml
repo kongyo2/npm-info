@@ -15,6 +15,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
     steps:
@@ -28,10 +29,6 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run check
-
-      - run: npm run clean && npm run build
-
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
@@ -40,9 +37,9 @@ jobs:
       - name: Bump version
         run: npm version ${{ inputs.version }} -m "v%s"
 
+      - name: Push version commit and tag
+        run: git push origin HEAD --follow-tags
+
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Push version commit and tag
-        run: git push origin HEAD --follow-tags
