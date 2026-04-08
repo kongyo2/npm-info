@@ -90,6 +90,11 @@ export async function searchPackages(
   const url = `${NPM_REGISTRY_URL}/-/v1/search?text=${encodeURIComponent(query)}&size=${limit}`;
   const response = await fetchWithTimeout(url);
   if (!response.ok) {
+    if (response.status === 400) {
+      throw new Error(
+        `Invalid search query. The query must be between 2 and 64 characters.`
+      );
+    }
     throw new Error(
       `npm search API returned status ${response.status}. Try again later.`
     );
@@ -142,6 +147,19 @@ export function extractGitHubRepo(
   const repoObj = typeof repository === "string" ? null : repository;
   const url = typeof repository === "string" ? repository : repository.url;
   if (!url) return null;
+
+  // Handle github:owner/repo shorthand notation
+  const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
+  if (shorthandMatch) {
+    const result: { owner: string; repo: string; directory?: string } = {
+      owner: shorthandMatch[1],
+      repo: shorthandMatch[2],
+    };
+    if (repoObj?.directory) {
+      result.directory = repoObj.directory;
+    }
+    return result;
+  }
 
   const match = url.match(
     /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/

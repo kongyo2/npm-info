@@ -6,8 +6,9 @@ import { DEFAULT_SEARCH_LIMIT } from "../constants.js";
 const SearchInputSchema = {
   query: z
     .string()
-    .min(1, "Search query must not be empty")
-    .max(200, "Search query must not exceed 200 characters")
+    .trim()
+    .min(2, "Search query must be at least 2 characters")
+    .max(64, "Search query must not exceed 64 characters")
     .describe("Search query for npm packages (keywords, package names, descriptions)"),
   limit: z
     .number()
