@@ -14,7 +14,7 @@ import type {
 export function validatePackageName(name: string): void {
   if (!PACKAGE_NAME_REGEX.test(name)) {
     throw new Error(
-      `Invalid package name: "${name}". Package names must be lowercase, may contain hyphens, dots, underscores, tildes, and scoped names (@scope/name).`
+      `Invalid package name: "${name}". Package names may contain letters, digits, hyphens, dots, underscores, tildes, and scoped names (@scope/name).`
     );
   }
 }
