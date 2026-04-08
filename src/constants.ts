@@ -5,4 +5,5 @@ export const DEFAULT_REQUEST_TIMEOUT = 15000;
 export const DEFAULT_SEARCH_LIMIT = 10;
 export const DEFAULT_VERSIONS_LIMIT = 20;
 
-export const PACKAGE_NAME_REGEX = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+export const PACKAGE_NAME_REGEX =
+  /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;

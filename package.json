@@ -11,7 +11,13 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "lint": "oxlint --silent",
+    "lint:strict": "oxlint --deny-warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "tsc --noEmit && oxlint --silent && prettier --check .",
+    "check:file": "oxlint"
   },
   "engines": {
     "node": ">=18"
@@ -22,6 +28,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.2",
+    "oxlint": "^1.59.0",
+    "prettier": "^3.8.1",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }

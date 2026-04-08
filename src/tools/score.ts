@@ -93,17 +93,13 @@ Examples:
               `- **Community Interest:** ${num(ev.popularity.communityInterest)}`
             );
           if (ev.popularity.downloadsCount !== undefined)
-            lines.push(
-              `- **Downloads (30d):** ${num(ev.popularity.downloadsCount)}`
-            );
+            lines.push(`- **Downloads (30d):** ${num(ev.popularity.downloadsCount)}`);
           if (ev.popularity.downloadsAcceleration !== undefined)
             lines.push(
               `- **Download Acceleration:** ${ev.popularity.downloadsAcceleration.toFixed(1)}`
             );
           if (ev.popularity.dependentsCount !== undefined)
-            lines.push(
-              `- **Dependents:** ${num(ev.popularity.dependentsCount)}`
-            );
+            lines.push(`- **Dependents:** ${num(ev.popularity.dependentsCount)}`);
           lines.push("");
         }
 
@@ -115,9 +111,7 @@ Examples:
               `- **Release Frequency:** ${pct(ev.maintenance.releasesFrequency)}`
             );
           if (ev.maintenance.commitsFrequency !== undefined)
-            lines.push(
-              `- **Commit Frequency:** ${pct(ev.maintenance.commitsFrequency)}`
-            );
+            lines.push(`- **Commit Frequency:** ${pct(ev.maintenance.commitsFrequency)}`);
           if (ev.maintenance.openIssues !== undefined)
             lines.push(`- **Open Issues:** ${pct(ev.maintenance.openIssues)}`);
           if (ev.maintenance.issuesDistribution !== undefined)

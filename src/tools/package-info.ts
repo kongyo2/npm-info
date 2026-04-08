@@ -66,9 +66,10 @@ Examples:
       try {
         const metadata = await fetchPackageMetadata(package_name);
         const latestTag = metadata["dist-tags"]?.latest;
-        const latestVersion = latestTag && metadata.versions?.[latestTag]
-          ? metadata.versions[latestTag]
-          : undefined;
+        const latestVersion =
+          latestTag && metadata.versions?.[latestTag]
+            ? metadata.versions[latestTag]
+            : undefined;
 
         const lines: string[] = [`# ${metadata.name}`];
         if (metadata.description) lines.push("", metadata.description);
@@ -117,10 +118,14 @@ Examples:
           const depCount = Object.keys(latestVersion.dependencies ?? {}).length;
           const peerCount = Object.keys(latestVersion.peerDependencies ?? {}).length;
           lines.push("");
-          lines.push(`**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`);
+          lines.push(
+            `**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`
+          );
 
           if (latestVersion.types || latestVersion.typings) {
-            lines.push(`**TypeScript:** Bundled types (${latestVersion.types ?? latestVersion.typings})`);
+            lines.push(
+              `**TypeScript:** Bundled types (${latestVersion.types ?? latestVersion.typings})`
+            );
           }
 
           if (latestVersion.deprecated) {

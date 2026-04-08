@@ -81,7 +81,8 @@ Examples:
             lines.push(`**Keywords:** ${pkg.keywords.join(", ")}`);
           }
           if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
-          if (pkg.links?.repository) lines.push(`**Repository:** ${pkg.links.repository}`);
+          if (pkg.links?.repository)
+            lines.push(`**Repository:** ${pkg.links.repository}`);
           lines.push(
             `**Score:** overall=${(score.final * 100).toFixed(0)}% quality=${(score.detail.quality * 100).toFixed(0)}% popularity=${(score.detail.popularity * 100).toFixed(0)}% maintenance=${(score.detail.maintenance * 100).toFixed(0)}%`
           );

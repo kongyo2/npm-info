@@ -20,7 +20,9 @@ export function validatePackageName(name: string): void {
 }
 
 function encodePackageName(name: string): string {
-  return name.startsWith("@") ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name);
+  return name.startsWith("@")
+    ? `@${encodeURIComponent(name.slice(1))}`
+    : encodeURIComponent(name);
 }
 
 async function fetchWithTimeout(
@@ -93,9 +95,7 @@ export async function searchPackages(
   return (await response.json()) as NpmSearchResult;
 }
 
-export async function fetchNpmsScore(
-  packageName: string
-): Promise<NpmsPackageResponse> {
+export async function fetchNpmsScore(packageName: string): Promise<NpmsPackageResponse> {
   validatePackageName(packageName);
   const url = `${NPMS_API_URL}/package/${encodePackageName(packageName)}`;
   const response = await fetchWithTimeout(url);

@@ -1,9 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  fetchPackageMetadata,
-  fetchPackageVersion,
-} from "../services/npm-api.js";
+import { fetchPackageMetadata, fetchPackageVersion } from "../services/npm-api.js";
 
 const DependenciesInputSchema = {
   package_name: z
@@ -18,10 +15,7 @@ const DependenciesInputSchema = {
     ),
 };
 
-function formatDeps(
-  deps: Record<string, string> | undefined,
-  label: string
-): string[] {
+function formatDeps(deps: Record<string, string> | undefined, label: string): string[] {
   if (!deps || Object.keys(deps).length === 0) return [];
   const lines: string[] = [`### ${label} (${Object.keys(deps).length})`, ""];
   for (const [name, version] of Object.entries(deps)) {

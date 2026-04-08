@@ -1,19 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  fetchPackageMetadata,
-  checkDefinitelyTyped,
-} from "../services/npm-api.js";
+import { fetchPackageMetadata, checkDefinitelyTyped } from "../services/npm-api.js";
 
 const TypesCheckInputSchema = {
   package_name: z
     .string()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
-  version: z
-    .string()
-    .optional()
-    .describe("Specific version to check (default: latest)"),
+  version: z.string().optional().describe("Specific version to check (default: latest)"),
 };
 
 export function registerTypesCheckTool(server: McpServer): void {
@@ -52,8 +46,7 @@ Examples:
     async ({ package_name, version }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
-        const targetVersion =
-          version ?? metadata["dist-tags"]?.latest;
+        const targetVersion = version ?? metadata["dist-tags"]?.latest;
 
         if (!targetVersion || !metadata.versions?.[targetVersion]) {
           return {
@@ -90,9 +83,7 @@ Examples:
             ? `@types/${package_name.slice(1).replace("/", "__")}`
             : `@types/${package_name}`;
           lines.push(`**Bundled Types:** No`);
-          lines.push(
-            `**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`
-          );
+          lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);
           lines.push("");
           lines.push("Install types separately:");
           lines.push(`\`\`\`bash`);

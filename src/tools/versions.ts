@@ -14,7 +14,9 @@ const VersionsInputSchema = {
     .min(1)
     .max(100)
     .default(DEFAULT_VERSIONS_LIMIT)
-    .describe("Maximum number of versions to return, sorted by most recent (default: 20)"),
+    .describe(
+      "Maximum number of versions to return, sorted by most recent (default: 20)"
+    ),
 };
 
 export function registerVersionsTool(server: McpServer): void {
