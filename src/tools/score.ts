@@ -16,7 +16,7 @@ function pct(val: number | undefined): string {
 
 function num(val: number | undefined): string {
   if (val === undefined) return "N/A";
-  return val.toLocaleString();
+  return val.toLocaleString("en-US");
 }
 
 export function registerScoreTool(server: McpServer): void {
