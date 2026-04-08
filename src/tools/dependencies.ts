@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageMetadata, fetchPackageVersion } from "../services/npm-api.js";
+import { fetchPackageVersion } from "../services/npm-api.js";
 
 const DependenciesInputSchema = {
   package_name: z
@@ -58,26 +58,7 @@ Examples:
     },
     async ({ package_name, version }) => {
       try {
-        let versionData;
-
-        if (version) {
-          versionData = await fetchPackageVersion(package_name, version);
-        } else {
-          const metadata = await fetchPackageMetadata(package_name);
-          const latestTag = metadata["dist-tags"]?.latest;
-          if (!latestTag || !metadata.versions?.[latestTag]) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Could not determine latest version for "${package_name}".`,
-                },
-              ],
-              isError: true,
-            };
-          }
-          versionData = metadata.versions[latestTag];
-        }
+        const versionData = await fetchPackageVersion(package_name, version ?? "latest");
 
         const lines: string[] = [
           `# ${package_name}@${versionData.version} - Dependencies`,

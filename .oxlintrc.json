@@ -7,6 +7,7 @@
   },
   "rules": {
     "no-console": "off",
+    "unicorn/no-array-sort": "off",
     "typescript/no-explicit-any": "warn",
     "typescript/consistent-type-imports": "warn"
   },

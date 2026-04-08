@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageMetadata, checkDefinitelyTyped } from "../services/npm-api.js";
+import { fetchPackageVersion, checkDefinitelyTyped } from "../services/npm-api.js";
 
 const TypesCheckInputSchema = {
   package_name: z
@@ -45,26 +45,14 @@ Examples:
     },
     async ({ package_name, version }) => {
       try {
-        const metadata = await fetchPackageMetadata(package_name);
-        const targetVersion = version ?? metadata["dist-tags"]?.latest;
-
-        if (!targetVersion || !metadata.versions?.[targetVersion]) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Could not find version "${version ?? "latest"}" for "${package_name}".`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const versionData = metadata.versions[targetVersion];
+        const versionData = await fetchPackageVersion(package_name, version ?? "latest");
+        const targetVersion = versionData.version;
         const typesField = versionData.types ?? versionData.typings;
         const hasBundledTypes = !!typesField;
 
-        const dtResult = await checkDefinitelyTyped(package_name);
+        const dtResult = hasBundledTypes
+          ? { exists: false, version: undefined }
+          : await checkDefinitelyTyped(package_name);
 
         const lines: string[] = [
           `# ${package_name}@${targetVersion} - TypeScript Support`,

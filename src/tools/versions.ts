@@ -73,7 +73,7 @@ Examples:
 
         const versions = Object.keys(metadata.versions)
           .filter((v) => metadata.time![v])
-          .toSorted(
+          .sort(
             (a, b) =>
               new Date(metadata.time![b]).getTime() -
               new Date(metadata.time![a]).getTime()
