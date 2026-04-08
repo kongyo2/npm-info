@@ -6,4 +6,4 @@ export const DEFAULT_SEARCH_LIMIT = 10;
 export const DEFAULT_VERSIONS_LIMIT = 20;
 
 export const PACKAGE_NAME_REGEX =
-  /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+  /^(@[a-zA-Z0-9-~][a-zA-Z0-9-._~]*\/)?[a-zA-Z0-9-~][a-zA-Z0-9-._~]*$/;

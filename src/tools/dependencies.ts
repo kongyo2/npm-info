@@ -58,7 +58,10 @@ Examples:
     },
     async ({ package_name, version }) => {
       try {
-        const versionData = await fetchPackageVersion(package_name, version ?? "latest");
+        const versionData = await fetchPackageVersion(
+          package_name,
+          version?.trim() || "latest"
+        );
 
         const lines: string[] = [
           `# ${package_name}@${versionData.version} - Dependencies`,
