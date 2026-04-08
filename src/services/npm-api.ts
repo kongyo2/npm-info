@@ -149,7 +149,7 @@ export function extractGitHubRepo(
   if (!url) return null;
 
   // Handle github:owner/repo shorthand notation
-  const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+)$/);
+  const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+?)(?:#.*)?$/);
   if (shorthandMatch) {
     const result: { owner: string; repo: string; directory?: string } = {
       owner: shorthandMatch[1],
