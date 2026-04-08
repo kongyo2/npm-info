@@ -50,7 +50,11 @@ Examples:
         if (!readmeContent || readmeContent === "ERROR: No README data found!") {
           const ghRepo = extractGitHubRepo(metadata.repository);
           if (ghRepo) {
-            const ghReadme = await fetchGitHubReadme(ghRepo.owner, ghRepo.repo);
+            const ghReadme = await fetchGitHubReadme(
+              ghRepo.owner,
+              ghRepo.repo,
+              ghRepo.directory
+            );
             if (ghReadme) {
               readmeContent = ghReadme;
               source = "github";

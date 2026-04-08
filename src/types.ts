@@ -33,7 +33,7 @@ export interface NpmRegistryResponse {
   maintainers?: Array<{ name: string; email?: string }>;
   homepage?: string;
   keywords?: string[];
-  repository?: { type?: string; url?: string } | string;
+  repository?: { type?: string; url?: string; directory?: string } | string;
   license?: string;
   readme?: string;
   readmeFilename?: string;

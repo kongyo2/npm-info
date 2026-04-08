@@ -28,14 +28,15 @@ function encodePackageName(name: string): string {
 
 async function fetchWithTimeout(
   url: string,
-  timeout: number = DEFAULT_REQUEST_TIMEOUT
+  timeout: number = DEFAULT_REQUEST_TIMEOUT,
+  headers: Record<string, string> = { Accept: "application/json" }
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { Accept: "application/json" },
+      headers,
     });
     return response;
   } finally {
@@ -135,37 +136,47 @@ export async function checkDefinitelyTyped(
 
 export function extractGitHubRepo(
   repository: NpmRegistryResponse["repository"]
-): { owner: string; repo: string } | null {
+): { owner: string; repo: string; directory?: string } | null {
   if (!repository) return null;
 
+  const repoObj = typeof repository === "string" ? null : repository;
   const url = typeof repository === "string" ? repository : repository.url;
   if (!url) return null;
 
-  const match = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
+  const match = url.match(
+    /(?:^|\/\/)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
+  );
   if (!match) return null;
 
-  return { owner: match[1], repo: match[2] };
+  const result: { owner: string; repo: string; directory?: string } = {
+    owner: match[1],
+    repo: match[2],
+  };
+
+  if (repoObj?.directory) {
+    result.directory = repoObj.directory;
+  }
+
+  return result;
 }
 
 export async function fetchGitHubReadme(
   owner: string,
-  repo: string
+  repo: string,
+  directory?: string
 ): Promise<string | null> {
-  const url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_REQUEST_TIMEOUT);
+  let url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
+  if (directory) {
+    url += `?dir=${encodeURIComponent(directory)}`;
+  }
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/vnd.github.raw+json",
-      },
+    const response = await fetchWithTimeout(url, DEFAULT_REQUEST_TIMEOUT, {
+      Accept: "application/vnd.github.raw",
+      "User-Agent": "npm-info-mcp-server",
     });
     if (!response.ok) return null;
     return await response.text();
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
