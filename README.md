@@ -1,5 +1,7 @@
 # @kongyo2/npm-info-mcp-server
 
+[![npm version](https://img.shields.io/npm/v/@kongyo2/npm-info-mcp-server.svg)](https://www.npmjs.com/package/@kongyo2/npm-info-mcp-server)
+[![CI](https://github.com/kongyo2/npm-info/actions/workflows/ci.yml/badge.svg)](https://github.com/kongyo2/npm-info/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kongyo2/npm-info)
 
 MCP server that provides npm package information for AI agents during TypeScript development.
