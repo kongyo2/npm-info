@@ -1,3 +1,15 @@
+export type PackageExports =
+  | string
+  | { [key: string]: PackageExports | null | undefined }
+  | null;
+
+export interface AbbreviatedPackument {
+  name: string;
+  modified?: string;
+  "dist-tags": Record<string, string>;
+  versions: Record<string, NpmPackageVersion>;
+}
+
 export interface NpmPackageVersion {
   name: string;
   version: string;
@@ -14,6 +26,10 @@ export interface NpmPackageVersion {
   optionalDependencies?: Record<string, string>;
   types?: string;
   typings?: string;
+  typesVersions?: Record<string, Record<string, string[]>>;
+  main?: string;
+  module?: string;
+  exports?: PackageExports;
   engines?: Record<string, string>;
   deprecated?: string;
   dist?: {
