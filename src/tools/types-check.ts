@@ -39,9 +39,15 @@ function inspectExportsForTypes(
     node: PackageExports | null | undefined
   ): string | undefined => {
     if (!node || typeof node !== "object") return undefined;
-    const direct = (node as Record<string, PackageExports>)["types"];
+    const obj = node as Record<string, PackageExports>;
+    // Prefer the unconditional `"types"` entry; fall back to the first
+    // versioned `types@<spec>` condition (TypeScript 5.5+ gated typing).
+    const direct = obj["types"];
     if (typeof direct === "string") return direct;
-    for (const value of Object.values(node)) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key.startsWith("types@") && typeof value === "string") return value;
+    }
+    for (const value of Object.values(obj)) {
       if (value && typeof value === "object") {
         const nested = visitConditions(value);
         if (nested) return nested;
