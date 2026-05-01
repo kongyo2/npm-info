@@ -306,12 +306,29 @@ export function maxSatisfying(versions: string[], range: string): string | null 
   for (const sub of subRanges) {
     const parsed = parseRange(sub);
     if (!parsed) continue;
-    const subTargetsPrerelease = /\d+\.\d+\.\d+-/.test(sub);
+    // npm/node-semver only allows a prerelease version to satisfy a range
+    // when the range explicitly references a prerelease at the same
+    // major.minor.patch tuple. Capture every such tuple appearing in this
+    // sub-range; a prerelease version is eligible only if its tuple is in
+    // this set. Without this, e.g. `>1.2.3-alpha.3` would erroneously
+    // match `3.4.5-alpha.9`.
+    const prereleaseAnchors: SemVer[] = [];
+    for (const m of sub.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
+      prereleaseAnchors.push([Number(m[1]), Number(m[2]), Number(m[3])]);
+    }
+    const allowsPrerelease = prereleaseAnchors.length > 0;
 
     for (const v of versions) {
-      if (v.includes("-") && !subTargetsPrerelease) continue;
+      const isPrereleaseV = v.includes("-");
+      if (isPrereleaseV && !allowsPrerelease) continue;
       const vp = parseSemver(v);
       if (!vp) continue;
+      if (
+        isPrereleaseV &&
+        !prereleaseAnchors.some((a) => a[0] === vp[0] && a[1] === vp[1] && a[2] === vp[2])
+      ) {
+        continue;
+      }
       if (parsed.min && cmpSemver(vp, parsed.min) < 0) continue;
       if (parsed.max && cmpSemver(vp, parsed.max) >= 0) continue;
       if (!bestParsed || cmpSemver(vp, bestParsed) > 0) {

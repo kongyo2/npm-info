@@ -158,7 +158,7 @@ async function resolveProductionTree(
     }
   }
 
-  await visit(rootName, rootHint, 1, true);
+  await visit(rootName, rootHint, 0, true);
 
   return {
     rootKey: rootResolvedKey ?? `${rootName}@${rootHint}`,
