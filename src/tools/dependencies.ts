@@ -82,7 +82,12 @@ async function resolveProductionTree(
 ): Promise<ResolveResult> {
   const runLimited = createLimiter(8);
   const packumentCache = new Map<string, AbbreviatedPackument>();
-  const queued = new Set<string>();
+  // Tracks the shallowest depth at which each `name@versionHint` was visited.
+  // Skipping by hint alone (a Set) is racy under concurrent fetches: if the
+  // same hint is first processed on a deeper branch (no children expanded
+  // because we hit the depth limit) and later seen at a shallower depth, the
+  // shallower visit must run so its children get explored.
+  const visitedAtDepth = new Map<string, number>();
   const tree: Record<string, TreeNode> = {};
   const hintToKey = new Map<string, string>();
   const warnings: string[] = [];
@@ -94,9 +99,11 @@ async function resolveProductionTree(
     currentDepth: number,
     isRoot: boolean
   ): Promise<void> {
+    if (currentDepth > maxDepth) return;
     const hintKey = `${name}@${versionHint}`;
-    if (queued.has(hintKey) || currentDepth > maxDepth) return;
-    queued.add(hintKey);
+    const prevDepth = visitedAtDepth.get(hintKey);
+    if (prevDepth !== undefined && prevDepth <= currentDepth) return;
+    visitedAtDepth.set(hintKey, currentDepth);
 
     let pkg = packumentCache.get(name);
     if (!pkg) {
@@ -107,31 +114,42 @@ async function resolveProductionTree(
         warnings.push(
           `Failed to fetch ${name}: ${err instanceof Error ? err.message : String(err)}`
         );
-        tree[hintKey] = { version: versionHint, dependencies: {} };
+        if (!tree[hintKey]) {
+          tree[hintKey] = { version: versionHint, dependencies: {} };
+        }
         hintToKey.set(hintKey, hintKey);
-        if (isRoot) rootResolvedKey = hintKey;
+        if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
         return;
       }
     }
 
-    let resolvedVersion: string;
+    let resolvedVersion: string | null;
     if (pkg.versions[versionHint]) {
       resolvedVersion = versionHint;
     } else if (pkg["dist-tags"]?.[versionHint]) {
       resolvedVersion = pkg["dist-tags"][versionHint];
     } else {
-      const matched = maxSatisfying(Object.keys(pkg.versions), versionHint);
-      resolvedVersion = matched ?? pkg["dist-tags"]?.latest ?? versionHint;
+      // No fallback to dist-tags.latest: if no published version satisfies
+      // the range, npm would refuse to install it. Surface that as a
+      // warning rather than silently expanding an unrelated version's deps.
+      resolvedVersion = maxSatisfying(Object.keys(pkg.versions), versionHint);
+    }
+
+    if (!resolvedVersion) {
+      warnings.push(`No published version of ${name} satisfies '${versionHint}'.`);
+      if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
+      return;
     }
 
     const resolvedKey = `${name}@${resolvedVersion}`;
     hintToKey.set(hintKey, resolvedKey);
     if (isRoot && !rootResolvedKey) rootResolvedKey = resolvedKey;
-    if (tree[resolvedKey]) return;
 
     const versionData = pkg.versions[resolvedVersion] as NpmPackageVersion | undefined;
     const deps = versionData?.dependencies ?? {};
-    tree[resolvedKey] = { version: resolvedVersion, dependencies: deps };
+    if (!tree[resolvedKey]) {
+      tree[resolvedKey] = { version: resolvedVersion, dependencies: deps };
+    }
 
     if (currentDepth < maxDepth) {
       await Promise.all(
