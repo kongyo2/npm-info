@@ -210,6 +210,32 @@ function makeSemver(major: number, minor: number, patch: number): SemVer {
   return { major, minor, patch, prerelease: [] };
 }
 
+interface PartialSemver {
+  semver: SemVer;
+  /** Number of explicit numeric parts: 1 = "1", 2 = "1.2", 3 = "1.2.3". */
+  parts: 1 | 2 | 3;
+}
+
+/**
+ * Parse a possibly-abbreviated version operand (e.g. `1`, `1.2`, `1.2.3`,
+ * `1.2.3-pre`). Missing parts default to zero. Returns the parsed semver
+ * along with the explicit-part count so callers can apply node-semver's
+ * partial-version expansion rules per operator.
+ */
+function parsePartial(v: string): PartialSemver | null {
+  const stripped = v.split("+")[0];
+  const m = stripped.match(/^(\d+)(?:\.(\d+)(?:\.(\d+)(?:-([0-9A-Za-z.-]+))?)?)?$/);
+  if (!m) return null;
+  const major = Number(m[1]);
+  const minor = m[2] !== undefined ? Number(m[2]) : 0;
+  const patch = m[3] !== undefined ? Number(m[3]) : 0;
+  const prerelease: Array<string | number> = m[4]
+    ? m[4].split(".").map((p) => (/^\d+$/.test(p) ? Number(p) : p))
+    : [];
+  const parts: 1 | 2 | 3 = m[3] !== undefined ? 3 : m[2] !== undefined ? 2 : 1;
+  return { semver: { major, minor, patch, prerelease }, parts };
+}
+
 /**
  * Compare two semver values. Implements the prerelease-precedence rules from
  * semver.org §11: numeric identifiers compare numerically; alphanumeric ones
@@ -262,52 +288,102 @@ function rangeAll(): SemverRange {
 function parseSingleConstraint(r: string): SemverRange | null {
   if (r === "*" || r === "") return rangeAll();
 
+  // Caret: `^X.Y.Z` keeps left-most non-zero stable. Abbreviated forms expand
+  // per node-semver: `^1` ≡ `>=1.0.0 <2.0.0`, `^1.2` ≡ `>=1.2.0 <2.0.0`,
+  // `^0.1` ≡ `>=0.1.0 <0.2.0`, `^0` ≡ `>=0.0.0 <1.0.0`.
   if (r.startsWith("^")) {
-    const base = parseSemver(r.slice(1));
-    if (!base) return null;
+    const p = parsePartial(r.slice(1));
+    if (!p) return null;
+    const { semver: base, parts } = p;
     let max: SemVer;
-    if (base.major > 0) max = makeSemver(base.major + 1, 0, 0);
-    else if (base.minor > 0) max = makeSemver(0, base.minor + 1, 0);
-    else max = makeSemver(0, 0, base.patch + 1);
+    if (base.major > 0 || parts === 1) {
+      max = makeSemver(base.major + 1, 0, 0);
+    } else if (base.minor > 0 || parts === 2) {
+      max = makeSemver(0, base.minor + 1, 0);
+    } else {
+      max = makeSemver(0, 0, base.patch + 1);
+    }
     return { min: base, minInclusive: true, max, maxInclusive: false };
   }
+
+  // Tilde: `~X.Y.Z` allows patch updates within X.Y. Abbreviated:
+  // `~1` ≡ `>=1.0.0 <2.0.0`, `~1.2` ≡ `>=1.2.0 <1.3.0`.
   if (r.startsWith("~")) {
-    const base = parseSemver(r.slice(1));
-    if (!base) return null;
-    return {
-      min: base,
-      minInclusive: true,
-      max: makeSemver(base.major, base.minor + 1, 0),
-      maxInclusive: false,
-    };
+    const p = parsePartial(r.slice(1));
+    if (!p) return null;
+    const { semver: base, parts } = p;
+    const max =
+      parts === 1
+        ? makeSemver(base.major + 1, 0, 0)
+        : makeSemver(base.major, base.minor + 1, 0);
+    return { min: base, minInclusive: true, max, maxInclusive: false };
   }
+
+  // `>=X` keeps the partial as the lower bound (missing parts default to 0,
+  // which is the lowest in the range — the desired behavior here).
   if (r.startsWith(">=")) {
-    const base = parseSemver(r.slice(2));
-    if (!base) return null;
-    return { min: base, minInclusive: true, max: null, maxInclusive: false };
+    const p = parsePartial(r.slice(2));
+    if (!p) return null;
+    return { min: p.semver, minInclusive: true, max: null, maxInclusive: false };
   }
+
+  // `>X.Y.Z` is exclusive on the original tuple (preserves prerelease
+  // ordering). Abbreviated: `>1` expands to "above all 1.x.x" ≡ `>=2.0.0`,
+  // `>1.2` expands to `>=1.3.0` (top of the abbreviated range, exclusive).
   if (r.startsWith(">")) {
-    const base = parseSemver(r.slice(1));
-    if (!base) return null;
-    // Exclusive lower bound: don't bump patch (which would drop prerelease
-    // ordering and exclude valid same-tuple prereleases like
-    // `>1.2.3-alpha.3` matching `1.2.3-alpha.7`).
-    return { min: base, minInclusive: false, max: null, maxInclusive: false };
+    const p = parsePartial(r.slice(1));
+    if (!p) return null;
+    const { semver: base, parts } = p;
+    if (parts === 3) {
+      return { min: base, minInclusive: false, max: null, maxInclusive: false };
+    }
+    const min =
+      parts === 1
+        ? makeSemver(base.major + 1, 0, 0)
+        : makeSemver(base.major, base.minor + 1, 0);
+    return { min, minInclusive: true, max: null, maxInclusive: false };
   }
+
+  // `<=X.Y.Z` is inclusive on the original tuple. Abbreviated `<=X` means
+  // "everything up to and including X.x.x" ≡ `<X+1.0.0`; `<=X.Y` ≡
+  // `<X.Y+1.0`.
   if (r.startsWith("<=")) {
-    const base = parseSemver(r.slice(2));
-    if (!base) return null;
-    return { min: null, minInclusive: true, max: base, maxInclusive: true };
+    const p = parsePartial(r.slice(2));
+    if (!p) return null;
+    const { semver: base, parts } = p;
+    if (parts === 3) {
+      return { min: null, minInclusive: true, max: base, maxInclusive: true };
+    }
+    const max =
+      parts === 1
+        ? makeSemver(base.major + 1, 0, 0)
+        : makeSemver(base.major, base.minor + 1, 0);
+    return { min: null, minInclusive: true, max, maxInclusive: false };
   }
+
+  // `<X` keeps the partial as the (exclusive) upper bound — missing parts
+  // default to 0, which gives `<1` ≡ `<1.0.0`, `<1.2` ≡ `<1.2.0`. Per
+  // node-semver this matches the lowest version in that abbreviated range.
   if (r.startsWith("<")) {
-    const base = parseSemver(r.slice(1));
-    if (!base) return null;
-    return { min: null, minInclusive: true, max: base, maxInclusive: false };
+    const p = parsePartial(r.slice(1));
+    if (!p) return null;
+    return { min: null, minInclusive: true, max: p.semver, maxInclusive: false };
   }
+
+  // `=X.Y.Z` pins exactly that version. Abbreviated `=X` ≡ `>=X.0.0
+  // <X+1.0.0`, `=X.Y` ≡ `>=X.Y.0 <X.Y+1.0`.
   if (r.startsWith("=")) {
-    const base = parseSemver(r.slice(1));
-    if (!base) return null;
-    return { min: base, minInclusive: true, max: base, maxInclusive: true };
+    const p = parsePartial(r.slice(1));
+    if (!p) return null;
+    const { semver: base, parts } = p;
+    if (parts === 3) {
+      return { min: base, minInclusive: true, max: base, maxInclusive: true };
+    }
+    const max =
+      parts === 1
+        ? makeSemver(base.major + 1, 0, 0)
+        : makeSemver(base.major, base.minor + 1, 0);
+    return { min: base, minInclusive: true, max, maxInclusive: false };
   }
 
   // x-ranges: 1, 1.x, 1.2, 1.2.x
