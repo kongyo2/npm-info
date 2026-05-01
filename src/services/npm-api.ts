@@ -410,22 +410,53 @@ function parseSingleConstraint(r: string): SemverRange | null {
         maxInclusive: false,
       };
     }
-    return null;
+    // Both major.minor.patch explicit — treat as an exact match. Without
+    // this, an OR sub-range like `2.0.0` in `^1 || 2.0.0` would silently
+    // be dropped by `parseRange` returning null.
+    const base = makeSemver(major, minor, patch);
+    return { min: base, minInclusive: true, max: base, maxInclusive: true };
+  }
+
+  // Bare exact version with prerelease (e.g. `1.2.3-alpha`). Same OR-range
+  // concern as above; the x-range regex doesn't carry prerelease info.
+  const bare = parseSemver(r);
+  if (bare) {
+    return { min: bare, minInclusive: true, max: bare, maxInclusive: true };
   }
   return null;
 }
 
 function parseRange(r: string): SemverRange | null {
+  // Hyphen ranges accept abbreviated endpoints on either side.
+  // Per node-semver: `1.2.3 - 2.3.4` ≡ `>=1.2.3 <=2.3.4`,
+  // `1.2 - 2.3` ≡ `>=1.2.0 <2.4.0`, `1 - 2` ≡ `>=1.0.0 <3.0.0`,
+  // `1.2.3 - 2` ≡ `>=1.2.3 <3.0.0`.
   const hyphenMatch = r.match(
-    /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s+-\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/
+    /^(\d+(?:\.\d+(?:\.\d+(?:-[0-9A-Za-z.-]+)?)?)?)\s+-\s+(\d+(?:\.\d+(?:\.\d+(?:-[0-9A-Za-z.-]+)?)?)?)$/
   );
   if (hyphenMatch) {
-    const low = parseSemver(hyphenMatch[1]);
-    const high = parseSemver(hyphenMatch[2]);
-    if (low && high) {
-      return { min: low, minInclusive: true, max: high, maxInclusive: true };
+    const lo = parsePartial(hyphenMatch[1]);
+    const hi = parsePartial(hyphenMatch[2]);
+    if (!lo || !hi) return null;
+    // Lower endpoint is always inclusive at the partial value (with missing
+    // parts defaulting to 0 — which `parsePartial` already does).
+    // Upper endpoint:
+    //   - 3 parts → inclusive on the exact value
+    //   - 2 parts → exclusive on `major.(minor+1).0`
+    //   - 1 part  → exclusive on `(major+1).0.0`
+    if (hi.parts === 3) {
+      return {
+        min: lo.semver,
+        minInclusive: true,
+        max: hi.semver,
+        maxInclusive: true,
+      };
     }
-    return null;
+    const max =
+      hi.parts === 1
+        ? makeSemver(hi.semver.major + 1, 0, 0)
+        : makeSemver(hi.semver.major, hi.semver.minor + 1, 0);
+    return { min: lo.semver, minInclusive: true, max, maxInclusive: false };
   }
 
   const parts = r.trim().split(/\s+/);
