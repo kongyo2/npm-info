@@ -58,6 +58,47 @@ interface TreeNode {
   dependencies: Record<string, string>;
 }
 
+/**
+ * Translate a package.json dependency entry into the (real package name,
+ * version hint) pair we should fetch from the registry.
+ *
+ * Standard entry: `"foo": "^1.0.0"` → `{ name: "foo", hint: "^1.0.0" }`.
+ *
+ * npm alias spec: `"foo": "npm:bar@^1.0.0"` (foo installed from package bar)
+ * → `{ name: "bar", hint: "^1.0.0" }`. Scoped aliases work too:
+ * `"foo": "npm:@scope/bar@1.0.0"` → `{ name: "@scope/bar", hint: "1.0.0" }`.
+ *
+ * Non-registry specs (git, file:, link:, http(s):, github: shorthand) can't
+ * be resolved through the npm registry — return null so the caller can
+ * record a clear warning instead of attempting a doomed packument fetch.
+ */
+function resolveDependencySpec(
+  alias: string,
+  raw: string
+): { name: string; hint: string } | null {
+  const trimmed = raw.trim();
+
+  if (trimmed.startsWith("npm:")) {
+    const spec = trimmed.slice(4);
+    const isScoped = spec.startsWith("@");
+    const at = isScoped ? spec.indexOf("@", 1) : spec.indexOf("@");
+    if (at > 0) {
+      return { name: spec.slice(0, at), hint: spec.slice(at + 1) || "latest" };
+    }
+    return { name: spec, hint: "latest" };
+  }
+
+  // Specs that can't be resolved against the registry.
+  if (
+    /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|github:)/i.test(trimmed) ||
+    /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed) // bare GitHub shorthand "owner/repo"
+  ) {
+    return null;
+  }
+
+  return { name: alias, hint: trimmed };
+}
+
 interface ResolveResult {
   rootKey: string;
   tree: Record<string, TreeNode>;
@@ -153,7 +194,14 @@ async function resolveProductionTree(
 
     if (currentDepth < maxDepth) {
       await Promise.all(
-        Object.entries(deps).map(([n, r]) => visit(n, r, currentDepth + 1, false))
+        Object.entries(deps).map(([alias, raw]) => {
+          const spec = resolveDependencySpec(alias, raw);
+          if (!spec) {
+            warnings.push(`Skipped non-registry dependency '${alias}': ${raw}`);
+            return Promise.resolve();
+          }
+          return visit(spec.name, spec.hint, currentDepth + 1, false);
+        })
       );
     }
   }
@@ -203,14 +251,23 @@ function formatTree(result: ResolveResult, maxDepth: number): string[] {
     const nextPrefix = depth === 0 ? "" : prefix + (isLast ? "    " : "│   ");
     deps.forEach(([depName, depRange], idx) => {
       const isLastChild = idx === deps.length - 1;
-      const childKey = result.hintToKey.get(`${depName}@${depRange}`);
+      const spec = resolveDependencySpec(depName, depRange);
+      if (!spec) {
+        lines.push(
+          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange} (non-registry)`
+        );
+        return;
+      }
+      const childKey = result.hintToKey.get(`${spec.name}@${spec.hint}`);
       if (childKey && result.tree[childKey]) {
         walk(childKey, nextPrefix, isLastChild, depth + 1);
       } else {
+        const label =
+          spec.name === depName
+            ? `${depName}@${depRange}`
+            : `${depName} → npm:${spec.name}@${spec.hint}`;
         const reason = depth + 1 > maxDepth ? "depth limit" : "not resolved";
-        lines.push(
-          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange} (${reason})`
-        );
+        lines.push(`${nextPrefix}${isLastChild ? "└── " : "├── "}${label} (${reason})`);
       }
     });
   };

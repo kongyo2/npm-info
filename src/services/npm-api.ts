@@ -182,79 +182,157 @@ export function createLimiter(max: number) {
   };
 }
 
-type SemVer = [number, number, number];
-
-function parseSemver(v: string): SemVer | null {
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)/);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+interface SemVer {
+  major: number;
+  minor: number;
+  patch: number;
+  /** Empty when the version is not a prerelease. */
+  prerelease: Array<string | number>;
 }
 
+function parseSemver(v: string): SemVer | null {
+  // Strip build metadata (anything after `+`).
+  const stripped = v.split("+")[0];
+  const m = stripped.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!m) return null;
+  const prerelease: Array<string | number> = m[4]
+    ? m[4].split(".").map((p) => (/^\d+$/.test(p) ? Number(p) : p))
+    : [];
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3]),
+    prerelease,
+  };
+}
+
+function makeSemver(major: number, minor: number, patch: number): SemVer {
+  return { major, minor, patch, prerelease: [] };
+}
+
+/**
+ * Compare two semver values. Implements the prerelease-precedence rules from
+ * semver.org §11: numeric identifiers compare numerically; alphanumeric ones
+ * compare lexically; numeric < alphanumeric; a shorter prefix-equal prerelease
+ * is lower; and a non-prerelease version is greater than a prerelease at the
+ * same major.minor.patch.
+ */
 function cmpSemver(a: SemVer, b: SemVer): number {
-  for (let i = 0; i < 3; i++) {
-    if (a[i] < b[i]) return -1;
-    if (a[i] > b[i]) return 1;
+  if (a.major !== b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
+
+  const ap = a.prerelease;
+  const bp = b.prerelease;
+  if (ap.length === 0 && bp.length === 0) return 0;
+  if (ap.length === 0) return 1;
+  if (bp.length === 0) return -1;
+
+  const len = Math.min(ap.length, bp.length);
+  for (let i = 0; i < len; i++) {
+    const x = ap[i];
+    const y = bp[i];
+    if (typeof x === "number" && typeof y === "number") {
+      if (x !== y) return x < y ? -1 : 1;
+    } else if (typeof x === "number") {
+      return -1;
+    } else if (typeof y === "number") {
+      return 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
   }
+  if (ap.length !== bp.length) return ap.length < bp.length ? -1 : 1;
   return 0;
 }
 
 interface SemverRange {
   min: SemVer | null;
+  /** True when min is `>=`, false when `>`. Ignored if min is null. */
+  minInclusive: boolean;
   max: SemVer | null;
+  /** True when max is `<=`, false when `<`. Ignored if max is null. */
+  maxInclusive: boolean;
+}
+
+function rangeAll(): SemverRange {
+  return { min: null, minInclusive: true, max: null, maxInclusive: false };
 }
 
 function parseSingleConstraint(r: string): SemverRange | null {
-  if (r === "*" || r === "") return { min: null, max: null };
+  if (r === "*" || r === "") return rangeAll();
 
   if (r.startsWith("^")) {
     const base = parseSemver(r.slice(1));
     if (!base) return null;
     let max: SemVer;
-    if (base[0] > 0) max = [base[0] + 1, 0, 0];
-    else if (base[1] > 0) max = [0, base[1] + 1, 0];
-    else max = [0, 0, base[2] + 1];
-    return { min: base, max };
+    if (base.major > 0) max = makeSemver(base.major + 1, 0, 0);
+    else if (base.minor > 0) max = makeSemver(0, base.minor + 1, 0);
+    else max = makeSemver(0, 0, base.patch + 1);
+    return { min: base, minInclusive: true, max, maxInclusive: false };
   }
   if (r.startsWith("~")) {
     const base = parseSemver(r.slice(1));
     if (!base) return null;
-    return { min: base, max: [base[0], base[1] + 1, 0] };
+    return {
+      min: base,
+      minInclusive: true,
+      max: makeSemver(base.major, base.minor + 1, 0),
+      maxInclusive: false,
+    };
   }
   if (r.startsWith(">=")) {
     const base = parseSemver(r.slice(2));
     if (!base) return null;
-    return { min: base, max: null };
+    return { min: base, minInclusive: true, max: null, maxInclusive: false };
   }
   if (r.startsWith(">")) {
     const base = parseSemver(r.slice(1));
     if (!base) return null;
-    return { min: [base[0], base[1], base[2] + 1], max: null };
+    // Exclusive lower bound: don't bump patch (which would drop prerelease
+    // ordering and exclude valid same-tuple prereleases like
+    // `>1.2.3-alpha.3` matching `1.2.3-alpha.7`).
+    return { min: base, minInclusive: false, max: null, maxInclusive: false };
   }
   if (r.startsWith("<=")) {
     const base = parseSemver(r.slice(2));
     if (!base) return null;
-    return { min: null, max: [base[0], base[1], base[2] + 1] };
+    return { min: null, minInclusive: true, max: base, maxInclusive: true };
   }
   if (r.startsWith("<")) {
     const base = parseSemver(r.slice(1));
     if (!base) return null;
-    return { min: null, max: base };
+    return { min: null, minInclusive: true, max: base, maxInclusive: false };
   }
   if (r.startsWith("=")) {
     const base = parseSemver(r.slice(1));
     if (!base) return null;
-    return { min: base, max: [base[0], base[1], base[2] + 1] };
+    return { min: base, minInclusive: true, max: base, maxInclusive: true };
   }
 
+  // x-ranges: 1, 1.x, 1.2, 1.2.x
   const xm = r.match(/^(\d+)(?:\.(\d+|x|\*)(?:\.(\d+|x|\*))?)?$/);
   if (xm) {
     const major = Number(xm[1]);
     const minor =
       xm[2] !== undefined && xm[2] !== "x" && xm[2] !== "*" ? Number(xm[2]) : null;
-    if (minor === null) return { min: [major, 0, 0], max: [major + 1, 0, 0] };
+    if (minor === null) {
+      return {
+        min: makeSemver(major, 0, 0),
+        minInclusive: true,
+        max: makeSemver(major + 1, 0, 0),
+        maxInclusive: false,
+      };
+    }
     const patch =
       xm[3] !== undefined && xm[3] !== "x" && xm[3] !== "*" ? Number(xm[3]) : null;
     if (patch === null) {
-      return { min: [major, minor, 0], max: [major, minor + 1, 0] };
+      return {
+        min: makeSemver(major, minor, 0),
+        minInclusive: true,
+        max: makeSemver(major, minor + 1, 0),
+        maxInclusive: false,
+      };
     }
     return null;
   }
@@ -262,29 +340,47 @@ function parseSingleConstraint(r: string): SemverRange | null {
 }
 
 function parseRange(r: string): SemverRange | null {
-  const hyphenMatch = r.match(/^(\d+\.\d+\.\d+)\s+-\s+(\d+\.\d+\.\d+)$/);
+  const hyphenMatch = r.match(
+    /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s+-\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/
+  );
   if (hyphenMatch) {
     const low = parseSemver(hyphenMatch[1]);
     const high = parseSemver(hyphenMatch[2]);
-    if (low && high) return { min: low, max: [high[0], high[1], high[2] + 1] };
+    if (low && high) {
+      return { min: low, minInclusive: true, max: high, maxInclusive: true };
+    }
     return null;
   }
 
   const parts = r.trim().split(/\s+/);
   if (parts.length > 1) {
     let min: SemVer | null = null;
+    let minInclusive = true;
     let max: SemVer | null = null;
+    let maxInclusive = false;
     for (const part of parts) {
       const constraint = parseSingleConstraint(part);
       if (!constraint) return null;
       if (constraint.min) {
-        if (!min || cmpSemver(constraint.min, min) > 0) min = constraint.min;
+        const cmp = min ? cmpSemver(constraint.min, min) : 1;
+        if (!min || cmp > 0) {
+          min = constraint.min;
+          minInclusive = constraint.minInclusive;
+        } else if (cmp === 0) {
+          minInclusive = minInclusive && constraint.minInclusive;
+        }
       }
       if (constraint.max) {
-        if (!max || cmpSemver(constraint.max, max) < 0) max = constraint.max;
+        const cmp = max ? cmpSemver(constraint.max, max) : -1;
+        if (!max || cmp < 0) {
+          max = constraint.max;
+          maxInclusive = constraint.maxInclusive;
+        } else if (cmp === 0) {
+          maxInclusive = maxInclusive && constraint.maxInclusive;
+        }
       }
     }
-    return { min, max };
+    return { min, minInclusive, max, maxInclusive };
   }
   return parseSingleConstraint(r.trim());
 }
@@ -312,25 +408,33 @@ export function maxSatisfying(versions: string[], range: string): string | null 
     // sub-range; a prerelease version is eligible only if its tuple is in
     // this set. Without this, e.g. `>1.2.3-alpha.3` would erroneously
     // match `3.4.5-alpha.9`.
-    const prereleaseAnchors: SemVer[] = [];
+    const prereleaseAnchors: Array<[number, number, number]> = [];
     for (const m of sub.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
       prereleaseAnchors.push([Number(m[1]), Number(m[2]), Number(m[3])]);
     }
     const allowsPrerelease = prereleaseAnchors.length > 0;
 
     for (const v of versions) {
-      const isPrereleaseV = v.includes("-");
-      if (isPrereleaseV && !allowsPrerelease) continue;
       const vp = parseSemver(v);
       if (!vp) continue;
+      const isPrereleaseV = vp.prerelease.length > 0;
+      if (isPrereleaseV && !allowsPrerelease) continue;
       if (
         isPrereleaseV &&
-        !prereleaseAnchors.some((a) => a[0] === vp[0] && a[1] === vp[1] && a[2] === vp[2])
+        !prereleaseAnchors.some(
+          (a) => a[0] === vp.major && a[1] === vp.minor && a[2] === vp.patch
+        )
       ) {
         continue;
       }
-      if (parsed.min && cmpSemver(vp, parsed.min) < 0) continue;
-      if (parsed.max && cmpSemver(vp, parsed.max) >= 0) continue;
+      if (parsed.min) {
+        const c = cmpSemver(vp, parsed.min);
+        if (c < 0 || (c === 0 && !parsed.minInclusive)) continue;
+      }
+      if (parsed.max) {
+        const c = cmpSemver(vp, parsed.max);
+        if (c > 0 || (c === 0 && !parsed.maxInclusive)) continue;
+      }
       if (!bestParsed || cmpSemver(vp, bestParsed) > 0) {
         best = v;
         bestParsed = vp;
