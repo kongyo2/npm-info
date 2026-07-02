@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchNpmsScore } from "../services/npm-api.js";
+import { errorResult, textResult } from "./shared.js";
 
 const ScoreInputSchema = {
   package_name: z
@@ -16,7 +17,16 @@ function pct(val: number | undefined): string {
 
 function num(val: number | undefined): string {
   if (val === undefined) return "N/A";
-  return val.toLocaleString("en-US");
+  return Math.round(val).toLocaleString("en-US");
+}
+
+const MS_PER_DAY = 86_400_000;
+
+function windowDays(from: string, to: string): number | null {
+  const start = Date.parse(from);
+  const end = Date.parse(to);
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return null;
+  return Math.round((end - start) / MS_PER_DAY);
 }
 
 export function registerScoreTool(server: McpServer): void {
@@ -121,6 +131,19 @@ Examples:
           lines.push("");
         }
 
+        const downloads = data.collected.npm?.downloads;
+        if (downloads?.length) {
+          lines.push("## Download Statistics");
+          lines.push("");
+          for (const window of downloads) {
+            const days = windowDays(window.from, window.to);
+            const label =
+              days === null ? `${window.from} – ${window.to}` : `Last ${days} days`;
+            lines.push(`- **${label}:** ${num(window.count)}`);
+          }
+          lines.push("");
+        }
+
         if (data.collected.github) {
           const gh = data.collected.github;
           lines.push("## GitHub Stats");
@@ -138,19 +161,9 @@ Examples:
 
         lines.push(`**Analyzed:** ${data.analyzedAt}`);
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );

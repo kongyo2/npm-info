@@ -31,7 +31,7 @@ registerScoreTool(server);
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("npm-info-mcp-server running via stdio");
+  console.error(`npm-info-mcp-server v${version} running via stdio`);
 }
 
 main().catch((error) => {

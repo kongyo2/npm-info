@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchPackageMetadata } from "../services/npm-api.js";
+import type { NpmPackageVersion, NpmRegistryResponse } from "../types.js";
+import { errorResult, textResult } from "./shared.js";
 
 const PackageInfoInputSchema = {
   package_name: z
@@ -9,27 +11,23 @@ const PackageInfoInputSchema = {
     .describe("npm package name (e.g., 'react', '@types/node', 'lodash')"),
 };
 
-function formatRepository(repo: unknown): string | undefined {
+function formatRepository(repo: NpmRegistryResponse["repository"]): string | undefined {
   if (!repo) return undefined;
   if (typeof repo === "string") return repo;
-  if (typeof repo === "object" && repo !== null && "url" in repo) {
-    const url = (repo as { url: string }).url;
-    return url.replace(/^git\+/, "").replace(/\.git$/, "");
+  if (typeof repo.url === "string") {
+    return repo.url.replace(/^git\+/, "").replace(/\.git$/, "");
   }
   return undefined;
 }
 
-function formatAuthor(author: unknown): string | undefined {
+function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
   if (!author) return undefined;
   if (typeof author === "string") return author;
-  if (typeof author === "object" && author !== null && "name" in author) {
-    const a = author as { name?: string; email?: string; url?: string };
-    const parts = [a.name];
-    if (a.email) parts.push(`<${a.email}>`);
-    if (a.url) parts.push(`(${a.url})`);
-    return parts.join(" ");
-  }
-  return undefined;
+  const parts: string[] = [];
+  if (author.name) parts.push(author.name);
+  if (author.email) parts.push(`<${author.email}>`);
+  if (author.url) parts.push(`(${author.url})`);
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 export function registerPackageInfoTool(server: McpServer): void {
@@ -103,6 +101,15 @@ Examples:
           lines.push(`**Dist-tags:** ${tags}`);
         }
 
+        const publishDate = metadata.time?.[latestTag ?? ""];
+        if (publishDate) {
+          lines.push(`**Last Published:** ${publishDate}`);
+        }
+        const createdDate = metadata.time?.created;
+        if (createdDate) {
+          lines.push(`**Created:** ${createdDate}`);
+        }
+
         if (metadata.maintainers?.length) {
           lines.push("");
           lines.push("**Maintainers:**");
@@ -134,28 +141,9 @@ Examples:
           }
         }
 
-        const publishDate = metadata.time?.[latestTag ?? ""];
-        if (publishDate) {
-          lines.push(`**Last Published:** ${publishDate}`);
-        }
-        const createdDate = metadata.time?.created;
-        if (createdDate) {
-          lines.push(`**Created:** ${createdDate}`);
-        }
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );

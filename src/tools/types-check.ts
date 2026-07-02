@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageVersion, checkDefinitelyTyped } from "../services/npm-api.js";
+import {
+  fetchPackageVersion,
+  checkDefinitelyTyped,
+  typesPackageName,
+} from "../services/npm-api.js";
 import type { NpmPackageVersion, PackageExports } from "../types.js";
+import { errorMessage, errorResult, textResult } from "./shared.js";
 
 const TypesCheckInputSchema = {
   package_name: z
@@ -21,33 +26,54 @@ interface ExportsTypesFinding {
 }
 
 /**
+ * Resolve an exports target to a concrete path: strings pass through and
+ * fallback arrays yield their first string alternative.
+ */
+function pickTargetString(value: PackageExports | null | undefined): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string") return item;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Walk the package.json `exports` field and detect TypeScript "types"
  * conditions. Modern packages declare types via conditional exports rather
  * than the legacy `types`/`typings` fields, so we surface that explicitly.
+ * Exported for tests.
  */
-function inspectExportsForTypes(
+export function inspectExportsForTypes(
   exports: PackageExports | null | undefined
 ): ExportsTypesFinding {
   if (!exports || typeof exports === "string") {
     return { found: false, subpathCount: 0 };
   }
 
-  let rootEntry: string | undefined;
-  let subpathCount = 0;
-
   const visitConditions = (
     node: PackageExports | null | undefined
   ): string | undefined => {
     if (!node || typeof node !== "object") return undefined;
-    const obj = node as Record<string, PackageExports>;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const nested = visitConditions(item);
+        if (nested) return nested;
+      }
+      return undefined;
+    }
     // Prefer the unconditional `"types"` entry; fall back to the first
     // versioned `types@<spec>` condition (TypeScript 5.5+ gated typing).
-    const direct = obj["types"];
-    if (typeof direct === "string") return direct;
-    for (const [key, value] of Object.entries(obj)) {
-      if (key.startsWith("types@") && typeof value === "string") return value;
+    const direct = pickTargetString(node["types"]);
+    if (direct) return direct;
+    for (const [key, value] of Object.entries(node)) {
+      if (key.startsWith("types@")) {
+        const gated = pickTargetString(value);
+        if (gated) return gated;
+      }
     }
-    for (const value of Object.values(obj)) {
+    for (const value of Object.values(node)) {
       if (value && typeof value === "object") {
         const nested = visitConditions(value);
         if (nested) return nested;
@@ -56,9 +82,10 @@ function inspectExportsForTypes(
     return undefined;
   };
 
-  const topLevelKeys = Object.keys(exports);
   // Sugar form: `"exports": { "import": "...", "types": "..." }` (no subpaths)
-  const hasSubpaths = topLevelKeys.some((k) => k.startsWith("."));
+  const hasSubpaths = !Array.isArray(exports)
+    ? Object.keys(exports).some((k) => k.startsWith("."))
+    : false;
 
   if (!hasSubpaths) {
     const entry = visitConditions(exports);
@@ -68,6 +95,7 @@ function inspectExportsForTypes(
     return { found: false, subpathCount: 0 };
   }
 
+  let subpathCount = 0;
   let dotEntry: string | undefined;
   let firstEntry: string | undefined;
   for (const [subpath, value] of Object.entries(exports)) {
@@ -79,12 +107,12 @@ function inspectExportsForTypes(
       else if (!firstEntry) firstEntry = entry;
     }
   }
-  rootEntry = dotEntry ?? firstEntry;
 
-  return { found: subpathCount > 0, rootEntry, subpathCount };
+  if (subpathCount === 0) return { found: false, subpathCount: 0 };
+  return { found: true, rootEntry: dotEntry ?? firstEntry, subpathCount };
 }
 
-function detectTypesEntry(versionData: NpmPackageVersion): {
+export function detectTypesEntry(versionData: NpmPackageVersion): {
   entry?: string;
   source: "types" | "typings" | "exports" | "none";
   exportsSubpathCount: number;
@@ -159,9 +187,17 @@ Examples:
           !!versionData.typesVersions &&
           Object.keys(versionData.typesVersions).length > 0;
 
-        const dtResult = hasBundledTypes
-          ? { exists: false, version: undefined as string | undefined }
-          : await checkDefinitelyTyped(package_name);
+        // A transient DefinitelyTyped lookup failure should not discard the
+        // bundled-types detection we already have — degrade to a notice.
+        let dtResult: { exists: boolean; version?: string } = { exists: false };
+        let dtError: string | undefined;
+        if (!hasBundledTypes) {
+          try {
+            dtResult = await checkDefinitelyTyped(package_name);
+          } catch (error) {
+            dtError = errorMessage(error);
+          }
+        }
 
         const lines: string[] = [
           `# ${package_name}@${targetVersion} - TypeScript Support`,
@@ -194,9 +230,7 @@ Examples:
             "This package ships its own TypeScript type definitions. No additional @types/ package needed."
           );
         } else if (dtResult.exists) {
-          const typesName = package_name.startsWith("@")
-            ? `@types/${package_name.slice(1).replace("/", "__")}`
-            : `@types/${package_name}`;
+          const typesName = typesPackageName(package_name);
           lines.push(`**Bundled Types:** No`);
           lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);
           lines.push("");
@@ -204,6 +238,13 @@ Examples:
           lines.push(`\`\`\`bash`);
           lines.push(`npm install -D ${typesName}`);
           lines.push(`\`\`\``);
+        } else if (dtError) {
+          lines.push(`**Bundled Types:** No`);
+          lines.push(`**DefinitelyTyped:** Unknown (check failed: ${dtError})`);
+          lines.push("");
+          lines.push(
+            `Could not verify whether ${typesPackageName(package_name)} exists. Try again later.`
+          );
         } else {
           lines.push(`**Bundled Types:** No`);
           lines.push(`**DefinitelyTyped:** Not available`);
@@ -213,19 +254,9 @@ Examples:
           );
         }
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );
