@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchPackageMetadata } from "../services/npm-api.js";
 import { DEFAULT_VERSIONS_LIMIT } from "../constants.js";
+import { errorResult, textResult } from "./shared.js";
 
 const VersionsInputSchema = {
   package_name: z
@@ -51,16 +52,12 @@ Examples:
     async ({ package_name, limit }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
+        const allVersions = metadata.versions ?? {};
+        const time = metadata.time ?? {};
+        const totalVersions = Object.keys(allVersions).length;
 
-        if (!metadata.versions || !metadata.time) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No version information available for "${package_name}".`,
-              },
-            ],
-          };
+        if (totalVersions === 0 || !metadata.time) {
+          return textResult(`No version information available for "${package_name}".`);
         }
 
         const distTags = metadata["dist-tags"] ?? {};
@@ -71,16 +68,14 @@ Examples:
           tagLookup.set(ver, existing);
         }
 
-        const versions = Object.keys(metadata.versions)
-          .filter((v) => metadata.time![v])
-          .sort(
-            (a, b) =>
-              new Date(metadata.time![b]).getTime() -
-              new Date(metadata.time![a]).getTime()
-          )
+        const publishTime = (v: string): number => {
+          const ms = new Date(time[v]).getTime();
+          return Number.isNaN(ms) ? 0 : ms;
+        };
+        const versions = Object.keys(allVersions)
+          .filter((v) => time[v])
+          .sort((a, b) => publishTime(b) - publishTime(a))
           .slice(0, limit);
-
-        const totalVersions = Object.keys(metadata.versions).length;
 
         const lines: string[] = [
           `# ${package_name} - Versions`,
@@ -90,32 +85,22 @@ Examples:
         ];
 
         for (const ver of versions) {
-          const date = metadata.time[ver];
+          const date = time[ver];
           const tags = tagLookup.get(ver);
-          const versionData = metadata.versions![ver];
+          const versionData = allVersions[ver];
           let line = `- **${ver}** (${date})`;
           if (tags?.length) {
             line += ` [${tags.join(", ")}]`;
           }
-          if (versionData.deprecated) {
+          if (versionData?.deprecated) {
             line += ` **DEPRECATED**: ${versionData.deprecated}`;
           }
           lines.push(line);
         }
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );

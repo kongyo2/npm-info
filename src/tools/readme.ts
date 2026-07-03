@@ -6,6 +6,10 @@ import {
   fetchGitHubReadme,
 } from "../services/npm-api.js";
 import { CHARACTER_LIMIT } from "../constants.js";
+import { errorResult, textResult, truncateSafely } from "./shared.js";
+
+/** Sentinel the npm registry stores when a package has no README. */
+const NPM_MISSING_README = "ERROR: No README data found!";
 
 const ReadmeInputSchema = {
   package_name: z
@@ -47,7 +51,7 @@ Examples:
         let readmeContent = metadata.readme;
         let source = "npm";
 
-        if (!readmeContent || readmeContent === "ERROR: No README data found!") {
+        if (!readmeContent || readmeContent === NPM_MISSING_README) {
           const ghRepo = extractGitHubRepo(metadata.repository);
           if (ghRepo) {
             const ghReadme = await fetchGitHubReadme(
@@ -62,24 +66,16 @@ Examples:
           }
         }
 
-        if (!readmeContent || readmeContent === "ERROR: No README data found!") {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No README found for "${package_name}". Check the package's repository or homepage for documentation.`,
-              },
-            ],
-          };
+        if (!readmeContent || readmeContent === NPM_MISSING_README) {
+          return textResult(
+            `No README found for "${package_name}". Check the package's repository or homepage for documentation.`
+          );
         }
 
-        let readme = readmeContent;
-        let truncated = false;
-
-        if (readme.length > CHARACTER_LIMIT) {
-          readme = readme.slice(0, CHARACTER_LIMIT);
-          truncated = true;
-        }
+        const { text: readme, truncated } = truncateSafely(
+          readmeContent,
+          CHARACTER_LIMIT
+        );
 
         const lines: string[] = [`# README: ${package_name}`, ""];
 
@@ -92,26 +88,16 @@ Examples:
 
         if (truncated) {
           lines.push(
-            `> **Note:** README truncated from ${readmeContent.length} to ${CHARACTER_LIMIT} characters.`,
+            `> **Note:** README truncated from ${readmeContent.length} to ${readme.length} characters.`,
             ""
           );
         }
 
         lines.push(readme);
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );

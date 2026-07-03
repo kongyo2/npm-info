@@ -54,6 +54,7 @@ codex mcp add npm-info -- npx -y @kongyo2/npm-info-mcp-server
 ```bash
 npm install
 npm run dev      # Start dev server
+npm test         # Run unit tests
 npm run check    # Type check, lint & format
 npm run build    # Build
 ```

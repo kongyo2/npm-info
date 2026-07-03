@@ -1,6 +1,6 @@
 {
   "name": "@kongyo2/npm-info-mcp-server",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "MCP server that provides npm package information for AI agents during TypeScript development",
   "type": "module",
   "main": "dist/index.js",
@@ -19,9 +19,10 @@
     "lint:strict": "oxlint --deny-warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "tsc --noEmit && oxlint --silent && prettier --check .",
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "tsc -p tsconfig.test.json && oxlint --silent && prettier --check .",
     "check:file": "oxlint",
-    "prepublishOnly": "npm run clean && npm run build && npm run lint:strict && npm run format:check"
+    "prepublishOnly": "npm run clean && npm run build && npm run lint:strict && npm run format:check && npm test"
   },
   "keywords": [
     "mcp",

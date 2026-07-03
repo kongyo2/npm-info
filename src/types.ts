@@ -1,5 +1,6 @@
 export type PackageExports =
   | string
+  | PackageExports[]
   | { [key: string]: PackageExports | null | undefined }
   | null;
 
@@ -72,15 +73,15 @@ export interface NpmSearchResult {
       publisher?: { username?: string; email?: string };
       maintainers?: Array<{ username?: string; email?: string }>;
     };
-    score: {
+    score?: {
       final: number;
-      detail: {
+      detail?: {
         quality: number;
         popularity: number;
         maintenance: number;
       };
     };
-    searchScore: number;
+    searchScore?: number;
   }>;
   total: number;
 }
@@ -104,8 +105,8 @@ export interface NpmsPackageResponse {
       hasTestScript?: boolean;
       hasSelectiveFiles?: boolean;
     };
-    npm: {
-      downloads: Array<{ from: string; to: string; count: number }>;
+    npm?: {
+      downloads?: Array<{ from: string; to: string; count: number }>;
       starsCount?: number;
     };
     github?: {

@@ -1,12 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  fetchPackageVersion,
-  fetchAbbreviatedPackument,
-  createLimiter,
-  maxSatisfying,
-} from "../services/npm-api.js";
+import { fetchPackageVersion, fetchAbbreviatedPackument } from "../services/npm-api.js";
+import { createLimiter } from "../services/concurrency.js";
+import { maxSatisfying } from "../services/semver.js";
 import type { AbbreviatedPackument, NpmPackageVersion } from "../types.js";
+import { errorMessage, errorResult, textResult } from "./shared.js";
 
 const DependenciesInputSchema = {
   package_name: z
@@ -71,8 +69,10 @@ interface TreeNode {
  * Non-registry specs (git, file:, link:, http(s):, github: shorthand) can't
  * be resolved through the npm registry — return null so the caller can
  * record a clear warning instead of attempting a doomed packument fetch.
+ *
+ * Exported for tests.
  */
-function resolveDependencySpec(
+export function resolveDependencySpec(
   alias: string,
   raw: string
 ): { name: string; hint: string } | null {
@@ -152,9 +152,7 @@ async function resolveProductionTree(
         pkg = await runLimited(() => fetchAbbreviatedPackument(name));
         packumentCache.set(name, pkg);
       } catch (err) {
-        warnings.push(
-          `Failed to fetch ${name}: ${err instanceof Error ? err.message : String(err)}`
-        );
+        warnings.push(`Failed to fetch ${name}: ${errorMessage(err)}`);
         if (!tree[hintKey]) {
           tree[hintKey] = { version: versionHint, dependencies: {} };
         }
@@ -390,19 +388,9 @@ Examples:
           lines.push(...formatTree(tree, resolvedDepth));
         }
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );

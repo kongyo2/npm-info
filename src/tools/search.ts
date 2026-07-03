@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { searchPackages } from "../services/npm-api.js";
 import { DEFAULT_SEARCH_LIMIT } from "../constants.js";
+import { errorResult, textResult } from "./shared.js";
 
 const SearchInputSchema = {
   query: z
@@ -54,15 +55,10 @@ Examples:
       try {
         const result = await searchPackages(query, limit);
 
-        if (result.total === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No packages found matching "${query}". Try broader search terms.`,
-              },
-            ],
-          };
+        if (result.total === 0 || result.objects.length === 0) {
+          return textResult(
+            `No packages found matching "${query}". Try broader search terms.`
+          );
         }
 
         const lines: string[] = [
@@ -74,7 +70,6 @@ Examples:
 
         for (const obj of result.objects) {
           const pkg = obj.package;
-          const score = obj.score;
           lines.push(`## ${pkg.name} (v${pkg.version})`);
           if (pkg.description) lines.push(`${pkg.description}`);
           lines.push("");
@@ -84,26 +79,24 @@ Examples:
           if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
           if (pkg.links?.repository)
             lines.push(`**Repository:** ${pkg.links.repository}`);
-          lines.push(
-            `**Score:** overall=${score.final.toFixed(1)} quality=${(score.detail.quality * 100).toFixed(0)}% popularity=${(score.detail.popularity * 100).toFixed(0)}% maintenance=${(score.detail.maintenance * 100).toFixed(0)}%`
-          );
+          // `final` is a relevance number that is no longer normalized to
+          // 0-1 by the registry, so render it raw; the detail metrics are
+          // still documented as 0-1 fractions.
+          if (obj.score) {
+            const detail = obj.score.detail;
+            let scoreLine = `**Score:** overall=${obj.score.final.toFixed(1)}`;
+            if (detail) {
+              scoreLine += ` quality=${(detail.quality * 100).toFixed(0)}% popularity=${(detail.popularity * 100).toFixed(0)}% maintenance=${(detail.maintenance * 100).toFixed(0)}%`;
+            }
+            lines.push(scoreLine);
+          }
           lines.push(`**Published:** ${pkg.date}`);
           lines.push("");
         }
 
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
+        return textResult(lines);
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(error);
       }
     }
   );
