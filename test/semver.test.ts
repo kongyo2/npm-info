@@ -32,6 +32,27 @@ describe("maxSatisfying: exact versions", () => {
   it("returns null for garbage ranges", () => {
     assert.equal(maxSatisfying(VERSIONS, "not-a-range"), null);
   });
+
+  it("rejects operands with leading zeros, like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "01.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.02.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "=01"), null);
+    assert.equal(maxSatisfying(VERSIONS, "^01.2.3"), null);
+  });
+
+  it("rejects a bare or misapplied v prefix", () => {
+    assert.equal(maxSatisfying(VERSIONS, "v"), null);
+    assert.equal(maxSatisfying(VERSIONS, "v=1.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "v 1.2.3"), null);
+    // `v` before a real operand is still valid.
+    assert.equal(maxSatisfying(VERSIONS, "v1.2.3"), "1.2.3");
+    assert.equal(maxSatisfying(VERSIONS, "v*"), "2.0.0");
+  });
+
+  it("rejects empty build metadata", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+build.7"), "1.2.3");
+  });
 });
 
 describe("maxSatisfying: caret ranges", () => {
@@ -221,6 +242,14 @@ describe("maxSatisfying: compound ranges and unions", () => {
     );
   });
 
+  it("rejects the whole range when a union member is invalid", () => {
+    // node-semver considers a range invalid if any `||` branch is — it never
+    // silently ignores an unparseable branch.
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 || garbage"), null);
+    assert.equal(maxSatisfying(VERSIONS, "garbage || 1.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "^1.2.3 || ^bad"), null);
+  });
+
   it("supports exact comparators inside unions", () => {
     assert.equal(maxSatisfying(["1.5.0", "2.0.0"], "^1 || 2.0.0"), "2.0.0");
   });
@@ -275,6 +304,14 @@ describe("maxSatisfying: prerelease handling", () => {
       "1.0.0-alpha.beta"
     );
     assert.equal(maxSatisfying(versions, ">=1.0.0-beta.2 <1.0.0-rc.1"), "1.0.0-beta.11");
+  });
+
+  it("rejects numeric prerelease identifiers with leading zeros", () => {
+    assert.equal(maxSatisfying(["1.2.3-01"], "1.2.3-01"), null);
+    assert.equal(maxSatisfying(["1.2.3", "2.0.0"], ">=1.2.3-01"), null);
+    assert.equal(maxSatisfying(["1.2.3", "2.0.0"], "1.2.3-01 - 2.0.0"), null);
+    // Alphanumeric identifiers may start with zero — still valid.
+    assert.equal(maxSatisfying(["1.2.3-0a"], "1.2.3-0a"), "1.2.3-0a");
   });
 
   it("hyphen ranges anchor prereleases on their endpoints", () => {

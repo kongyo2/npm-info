@@ -15,22 +15,41 @@ export interface SemVer {
   prerelease: Array<string | number>;
 }
 
+/** A semver numeric part without leading zeros (`0` itself is allowed). */
+const NUMERIC = /^(?:0|[1-9]\d*)$/;
+
 export function parseSemver(v: string): SemVer | null {
-  // Strip build metadata (anything after `+`).
-  const stripped = v.split("+")[0];
-  const m = stripped.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
-  if (!m) return null;
+  const m = v.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
+  );
+  // node-semver rejects numeric identifiers with leading zeros.
+  if (!m || !NUMERIC.test(m[1]) || !NUMERIC.test(m[2]) || !NUMERIC.test(m[3])) {
+    return null;
+  }
+  const prerelease = parsePrerelease(m[4]);
+  if (!prerelease) return null;
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    prerelease: parsePrerelease(m[4]),
+    prerelease,
   };
 }
 
-function parsePrerelease(raw: string | undefined): Array<string | number> {
+function parsePrerelease(raw: string | undefined): Array<string | number> | null {
   if (!raw) return [];
-  return raw.split(".").map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+  const out: Array<string | number> = [];
+  for (const p of raw.split(".")) {
+    if (!/^[0-9A-Za-z-]+$/.test(p)) return null;
+    if (/^\d+$/.test(p)) {
+      // Numeric identifiers must not have leading zeros (`0` is fine).
+      if (p.length > 1 && p[0] === "0") return null;
+      out.push(Number(p));
+    } else {
+      out.push(p);
+    }
+  }
+  return out;
 }
 
 function makeSemver(major: number, minor: number, patch: number): SemVer {
@@ -59,12 +78,32 @@ function isWildcard(segment: string | undefined): boolean {
  * can apply node-semver's partial-version expansion rules per operator.
  */
 function parsePartial(v: string): PartialSemver | null {
-  // Strip an optional leading `v` and build metadata (anything after `+`).
-  const stripped = v.replace(/^v/, "").split("+")[0];
-  const m = stripped.match(
-    /^(\d+|[xX*])(?:\.(\d+|[xX*])(?:\.(\d+|[xX*])(?:-([0-9A-Za-z.-]+))?)?)?$/
+  // Strip an optional leading `v` (only before a real operand — `v=` or a
+  // bare `v` is invalid, matching node-semver).
+  const stripped = v.replace(/^v(?=[0-9xX*])/, "");
+  // Build metadata after `+` is ignored for range matching but must be
+  // well-formed when present (`1.2.3+` is invalid in node-semver).
+  const plusAt = stripped.indexOf("+");
+  const operand = plusAt === -1 ? stripped : stripped.slice(0, plusAt);
+  if (
+    plusAt !== -1 &&
+    !/^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/.test(stripped.slice(plusAt + 1))
+  ) {
+    return null;
+  }
+  const m = operand.match(
+    /^(\d+|[xX*])(?:\.(\d+|[xX*])(?:\.(\d+|[xX*])(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?)?)?$/
   );
   if (!m) return null;
+  // Reject leading zeros in numeric parts and in numeric prerelease ids,
+  // like node-semver does (`01.2.3`, `=01`, `1.2.3-01` are all invalid).
+  for (const part of [m[1], m[2], m[3]]) {
+    if (part !== undefined && /^\d+$/.test(part) && !NUMERIC.test(part)) {
+      return null;
+    }
+  }
+  const prerelease = parsePrerelease(m[4]);
+  if (prerelease === null) return null;
 
   let parts: 0 | 1 | 2 | 3;
   if (isWildcard(m[1])) parts = 0;
@@ -78,7 +117,7 @@ function parsePartial(v: string): PartialSemver | null {
       minor: parts >= 2 ? Number(m[2]) : 0,
       patch: parts >= 3 ? Number(m[3]) : 0,
       // A prerelease is only meaningful on a fully-specified version.
-      prerelease: parts === 3 ? parsePrerelease(m[4]) : [],
+      prerelease: parts === 3 ? prerelease : [],
     },
     parts,
   };
@@ -257,10 +296,11 @@ function expandHyphenRanges(range: string): string | null {
         invalid = true;
         return "";
       }
-      const min = lo.parts === 0 ? "" : `>=${loRaw.replace(/^v/, "")}`;
+      const min =
+        lo.parts === 0 ? "" : `>=${loRaw.replace(/^v(?=[0-9xX*])/, "")}`;
       let max = "";
       if (hi.parts === 3) {
-        max = `<=${hiRaw.replace(/^v/, "")}`;
+        max = `<=${hiRaw.replace(/^v(?=[0-9xX*])/, "")}`;
       } else if (hi.parts !== 0) {
         const bound = partialUpperBound(hi.semver, hi.parts);
         max = `<${bound.major}.${bound.minor}.${bound.patch}`;
@@ -319,12 +359,16 @@ function parseRange(r: string): SemverRange | null {
  * `versions` that satisfies `range`. Falls back to null if no match.
  */
 export function maxSatisfying(versions: string[], range: string): string | null {
-  const r = range.trim().replace(/^v/, "");
-  if (versions.includes(r)) return r;
+  const r = range.trim().replace(/^v(?=[0-9xX*])/, "");
+  if (versions.includes(r) && parseSemver(r)) return r;
 
   let subRanges = r
     .split("||")
     .map((s) => ({ sub: s.trim(), parsed: parseRange(s.trim()) }));
+
+  // node-semver rejects the whole range when any union member is invalid —
+  // it never silently ignores an unparseable branch.
+  if (subRanges.some(({ parsed }) => parsed === null)) return null;
 
   // node-semver collapses a union to `*` when any of its comparator sets is
   // the ANY set — which also discards the other sets' prerelease anchors.
