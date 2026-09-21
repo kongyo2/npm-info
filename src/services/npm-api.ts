@@ -1,6 +1,8 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   NPM_REGISTRY_URL,
   NPMS_API_URL,
+  NPM_DOWNLOADS_API_URL,
   GITHUB_API_URL,
   USER_AGENT,
   DEFAULT_REQUEST_TIMEOUT,
@@ -8,10 +10,12 @@ import {
   MAX_PACKAGE_NAME_LENGTH,
   PACKAGE_NAME_REGEX,
 } from "../constants.js";
+import { maxSatisfying } from "./semver.js";
 import type {
   NpmRegistryResponse,
   NpmSearchResult,
   NpmPackageVersion,
+  NpmDownloadsResponse,
   NpmsPackageResponse,
   AbbreviatedPackument,
 } from "../types.js";
@@ -45,10 +49,25 @@ export function typesPackageName(packageName: string): string {
     : `@types/${packageName}`;
 }
 
-async function fetchWithTimeout(
+/** HTTP error carrying the response status, so callers can branch on it. */
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
+/** Statuses worth one retry: rate limiting and transient gateway failures. */
+const RETRYABLE_STATUSES = new Set([429, 503]);
+/** Never wait longer than this for a Retry-After hint. */
+const MAX_RETRY_WAIT_MS = 10_000;
+
+async function fetchOnce(
   url: string,
-  timeout: number = DEFAULT_REQUEST_TIMEOUT,
-  headers: Record<string, string> = { Accept: "application/json" }
+  timeout: number,
+  headers: Record<string, string>
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -57,7 +76,7 @@ async function fetchWithTimeout(
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(
-        `Request timed out after ${timeout}ms. The registry may be slow or unreachable — try again later.`,
+        `Request timed out after ${timeout}ms. The remote service may be slow or unreachable — try again later.`,
         { cause: error }
       );
     }
@@ -65,6 +84,26 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  timeout: number = DEFAULT_REQUEST_TIMEOUT,
+  headers: Record<string, string> = { Accept: "application/json" }
+): Promise<Response> {
+  // Registries and CDNs are friendlier to clients that identify themselves.
+  const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
+  const first = await fetchOnce(url, timeout, merged);
+  if (!RETRYABLE_STATUSES.has(first.status)) return first;
+
+  // One retry, bounded by the server's Retry-After hint.
+  const retryAfter = Number(first.headers.get("retry-after"));
+  const waitMs =
+    Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, MAX_RETRY_WAIT_MS)
+      : 1000;
+  await delay(waitMs);
+  return fetchOnce(url, timeout, merged);
 }
 
 /**
@@ -79,9 +118,15 @@ async function fetchJson<T>(
 ): Promise<T> {
   const response = await fetchWithTimeout(url, timeout, headers);
   if (!response.ok) {
-    throw new Error(describeFailure(response.status));
+    throw new HttpError(describeFailure(response.status), response.status);
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    throw new Error(`Invalid JSON in the response from ${new URL(url).hostname}.`, {
+      cause: error,
+    });
+  }
 }
 
 export async function fetchPackageMetadata(
@@ -125,6 +170,34 @@ export async function fetchPackageVersion(
   );
 }
 
+/**
+ * Fetch the manifest for a requested version. The registry's `/<name>/<v>`
+ * endpoint only resolves exact versions and dist-tags, so a semver range
+ * like `^18` or `18.x` is resolved here by picking the maxSatisfying
+ * published version from the abbreviated packument.
+ */
+export async function fetchResolvedVersion(
+  packageName: string,
+  version?: string
+): Promise<NpmPackageVersion> {
+  const requested = version?.trim() || "latest";
+  try {
+    return await fetchPackageVersion(packageName, requested);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 404) throw error;
+
+    const packument = await fetchAbbreviatedPackument(packageName);
+    const resolved = maxSatisfying(Object.keys(packument.versions ?? {}), requested);
+    if (!resolved) {
+      throw new Error(
+        `No published version of "${packageName}" satisfies "${requested}". Use npm_package_versions to see available versions.`,
+        { cause: error }
+      );
+    }
+    return fetchPackageVersion(packageName, resolved);
+  }
+}
+
 export async function searchPackages(
   query: string,
   limit: number
@@ -147,15 +220,27 @@ export async function fetchNpmsScore(packageName: string): Promise<NpmsPackageRe
   );
 }
 
+export interface DefinitelyTypedResult {
+  exists: boolean;
+  version?: string;
+  /** Deprecation notice — @types packages for libs that now bundle their
+   * own types are published as deprecated stub definitions. */
+  deprecated?: string;
+}
+
 export async function checkDefinitelyTyped(
   packageName: string
-): Promise<{ exists: boolean; version?: string }> {
+): Promise<DefinitelyTypedResult> {
   const typesName = typesPackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(typesName)}/latest`;
   const response = await fetchWithTimeout(url, TYPES_CHECK_TIMEOUT);
   if (response.ok) {
     const data = (await response.json()) as NpmPackageVersion;
-    return { exists: true, version: data.version };
+    return {
+      exists: true,
+      version: data.version,
+      deprecated: typeof data.deprecated === "string" ? data.deprecated : undefined,
+    };
   }
   if (response.status === 404) {
     return { exists: false };
@@ -163,6 +248,24 @@ export async function checkDefinitelyTyped(
   throw new Error(
     `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
   );
+}
+
+/** Live download counts from the npm downloads API (api.npmjs.org). */
+export async function fetchNpmDownloads(
+  packageName: string
+): Promise<{ lastWeek?: NpmDownloadsResponse; lastMonth?: NpmDownloadsResponse }> {
+  const encoded = encodePackageName(packageName);
+  const [lastWeek, lastMonth] = await Promise.all([
+    fetchJson<NpmDownloadsResponse>(
+      `${NPM_DOWNLOADS_API_URL}/point/last-week/${encoded}`,
+      (status) => `npm downloads API returned status ${status} for "${packageName}".`
+    ).catch(() => undefined),
+    fetchJson<NpmDownloadsResponse>(
+      `${NPM_DOWNLOADS_API_URL}/point/last-month/${encoded}`,
+      (status) => `npm downloads API returned status ${status} for "${packageName}".`
+    ).catch(() => undefined),
+  ]);
+  return { lastWeek, lastMonth };
 }
 
 export function extractGitHubRepo(

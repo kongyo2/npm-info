@@ -1,5 +1,6 @@
 export const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 export const NPMS_API_URL = "https://api.npms.io/v2";
+export const NPM_DOWNLOADS_API_URL = "https://api.npmjs.org/downloads";
 export const GITHUB_API_URL = "https://api.github.com";
 export const USER_AGENT = "npm-info-mcp-server";
 export const CHARACTER_LIMIT = 25000;
