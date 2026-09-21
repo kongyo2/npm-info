@@ -9,7 +9,10 @@ export function createLimiter(max: number) {
     return new Promise<T>((resolve, reject) => {
       const run = (): void => {
         active++;
-        fn()
+        // A synchronous throw from fn() must still release the slot —
+        // Promise.resolve().then captures it into the rejection path.
+        Promise.resolve()
+          .then(fn)
           .then(resolve, reject)
           .finally(() => {
             active--;
