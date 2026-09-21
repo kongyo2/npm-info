@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inspectExportsForTypes, detectTypesEntry } from "../src/tools/types-check.js";
+import {
+  inspectExportsForTypes,
+  detectTypesEntry,
+  isDefinitelyTypedStub,
+} from "../src/tools/types-check.js";
 import type { NpmPackageVersion } from "../src/types.js";
 
 describe("inspectExportsForTypes", () => {
@@ -244,5 +248,31 @@ describe("detectTypesEntry", () => {
   it("reports none when nothing declares types", () => {
     const result = detectTypesEntry({ ...base, main: "./index.js" });
     assert.equal(result.source, "none");
+  });
+});
+
+describe("isDefinitelyTypedStub", () => {
+  it("matches the standard stub wording", () => {
+    assert.equal(
+      isDefinitelyTypedStub(
+        "This is a stub types definition. uuid provides its own type definitions, so you do not need this installed."
+      ),
+      true
+    );
+    assert.equal(
+      isDefinitelyTypedStub(
+        "This is a stub types definition for vuejs (https://github.com/vuejs/vue). vuejs provides its own type definitions, so you don't need @types/vue installed!"
+      ),
+      true
+    );
+  });
+
+  it("does not match other deprecations", () => {
+    assert.equal(
+      isDefinitelyTypedStub("This package is deprecated, use @types/other instead"),
+      false
+    );
+    assert.equal(isDefinitelyTypedStub("renamed to @scope/pkg"), false);
+    assert.equal(isDefinitelyTypedStub(undefined), false);
   });
 });

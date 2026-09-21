@@ -156,6 +156,12 @@ export function inspectExportsForTypes(
   };
 }
 
+const DT_STUB_DEPRECATION = /stub types definition|provides its own type/i;
+
+export function isDefinitelyTypedStub(deprecated: string | undefined): boolean {
+  return !!deprecated && DT_STUB_DEPRECATION.test(deprecated);
+}
+
 export function detectTypesEntry(versionData: NpmPackageVersion): {
   entry?: string;
   entryCondition?: string;
@@ -316,7 +322,7 @@ Examples:
         } else if (dtResult.exists) {
           const typesName = typesPackageName(package_name);
           lines.push(`**Bundled Types:** No`);
-          if (dtResult.deprecated) {
+          if (isDefinitelyTypedStub(dtResult.deprecated)) {
             lines.push(
               `**DefinitelyTyped:** ${typesName}@${dtResult.version} exists but is a deprecated stub`
             );
@@ -329,6 +335,10 @@ Examples:
           } else {
             lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);
             lines.push("");
+            if (dtResult.deprecated) {
+              lines.push(`> **Deprecated:** ${dtResult.deprecated}`);
+              lines.push("");
+            }
             lines.push("Install types separately:");
             lines.push(`\`\`\`bash`);
             lines.push(`npm install -D ${typesName}`);
