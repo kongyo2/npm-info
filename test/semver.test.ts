@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { maxSatisfying } from "../src/services/semver.js";
+import { maxSatisfying, satisfiableAtOrAbove } from "../src/services/semver.js";
 
 const VERSIONS = ["1.2.3", "1.2.4", "1.3.0", "2.0.0"];
 
@@ -295,10 +295,16 @@ describe("maxSatisfying: prerelease handling", () => {
 });
 
 describe("maxSatisfying: malformed operands (node-semver parity)", () => {
-  it("rejects a numeric segment after a wildcard in plain comparators", () => {
-    assert.equal(maxSatisfying(VERSIONS, "=x.5"), null);
+  it("truncates a numeric segment after a wildcard like npm's bundled semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "=x.5"), "2.0.0");
     assert.equal(maxSatisfying(VERSIONS, "<1.x.2"), null);
-    assert.equal(maxSatisfying(VERSIONS, ">=1.*.9"), null);
+    assert.equal(maxSatisfying(VERSIONS, ">=1.*.9"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.x.2"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, "x.2.3"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.x.2-beta"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, ">1.x.5"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "<=1.x.9"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.x.2 - 2"), "2.0.0");
   });
 
   it("truncates out-of-order wildcards under ~ and ^", () => {
@@ -529,5 +535,34 @@ describe("maxSatisfying: operator prefixes accepted by node-semver", () => {
     assert.equal(maxSatisfying(pool, "=v 1.2.3"), null);
     assert.equal(maxSatisfying(pool, "~=v 2.0.0"), null);
     assert.equal(maxSatisfying(pool, "> = 1.2.3"), null);
+  });
+
+  it("re-forms a tilde arrow after a spaced comparator like node-semver", () => {
+    const pool = ["0.5.3", "0.10.2", "0.11.0", "1.0.0", "10.5.3"];
+    assert.equal(maxSatisfying(pool, "~> >=0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "~> >= 0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "~ >=0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "~ > 0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "~> =0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "~> x"), "10.5.3");
+    assert.equal(maxSatisfying(pool, "~> <0.10"), null);
+    assert.equal(maxSatisfying(pool, "~>>=0.10"), null);
+    assert.equal(maxSatisfying(pool, "^ >=0.10"), null);
+    assert.equal(maxSatisfying(pool, "~>= 0.10"), "0.10.2");
+    assert.equal(maxSatisfying(pool, "= >0.10"), null);
+  });
+});
+
+describe("satisfiableAtOrAbove", () => {
+  it("reports whether a range admits some version at or above the floor", () => {
+    assert.equal(satisfiableAtOrAbove("*", "4.0.0"), true);
+    assert.equal(satisfiableAtOrAbove(">=5.1 <6", "4.0.0"), true);
+    assert.equal(satisfiableAtOrAbove(">=3.1 <5", "4.0.0"), true);
+    assert.equal(satisfiableAtOrAbove("<2.0", "4.0.0"), false);
+    assert.equal(satisfiableAtOrAbove("<=4.0.0", "4.0.0"), true);
+    assert.equal(satisfiableAtOrAbove("<4.0.0", "4.0.0"), false);
+    assert.equal(satisfiableAtOrAbove("<2.0 || >=4.1", "4.0.0"), true);
+    assert.equal(satisfiableAtOrAbove(">=9 <5", "4.0.0"), false);
+    assert.equal(satisfiableAtOrAbove("garbage", "4.0.0"), false);
   });
 });

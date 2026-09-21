@@ -62,24 +62,27 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function timeoutError(timeout: number, cause?: unknown): Error {
+  return new Error(
+    `Request timed out after ${Math.max(timeout, 0)}ms. The remote service may be slow or unreachable — try again later.`,
+    cause === undefined ? undefined : { cause }
+  );
+}
+
 async function fetchOnce<T>(
   url: string,
   timeout: number,
   headers: Record<string, string>,
   consume: (response: Response) => Promise<T>
 ): Promise<T> {
+  if (timeout <= 0) throw timeoutError(timeout);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, { signal: controller.signal, headers });
     return await consume(response);
   } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error(
-        `Request timed out after ${timeout}ms. The remote service may be slow or unreachable — try again later.`,
-        { cause: error }
-      );
-    }
+    if (isAbortError(error)) throw timeoutError(timeout, error);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -100,20 +103,29 @@ function retryDelayMs(retryAfter: string | null): number {
   return 1000;
 }
 
+function timeoutWithin(timeout: number, deadline: number | undefined): number {
+  return deadline === undefined ? timeout : Math.min(timeout, deadline - Date.now());
+}
+
 async function fetchWithTimeout<T>(
   url: string,
   consume: (response: Response) => Promise<T>,
   timeout: number = DEFAULT_REQUEST_TIMEOUT,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  deadline?: number
 ): Promise<T> {
   const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
   type Attempt = { done: true; value: T } | { done: false; retryAfter: string | null };
   const first = await fetchOnce(
     url,
-    timeout,
+    timeoutWithin(timeout, deadline),
     merged,
     async (response): Promise<Attempt> => {
       if (!RETRYABLE_STATUSES.has(response.status)) {
+        return { done: true, value: await consume(response) };
+      }
+      const waitMs = retryDelayMs(response.headers.get("retry-after"));
+      if (deadline !== undefined && Date.now() + waitMs >= deadline) {
         return { done: true, value: await consume(response) };
       }
       await response.body?.cancel().catch(() => undefined);
@@ -123,14 +135,15 @@ async function fetchWithTimeout<T>(
   if (first.done) return first.value;
 
   await delay(retryDelayMs(first.retryAfter));
-  return fetchOnce(url, timeout, merged, consume);
+  return fetchOnce(url, timeoutWithin(timeout, deadline), merged, consume);
 }
 
 async function fetchJson<T>(
   url: string,
   describeFailure: (status: number) => string,
   timeout?: number,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  deadline?: number
 ): Promise<T> {
   return fetchWithTimeout(
     url,
@@ -148,7 +161,8 @@ async function fetchJson<T>(
       }
     },
     timeout,
-    headers
+    headers,
+    deadline
   );
 }
 
@@ -165,7 +179,8 @@ export async function fetchPackageMetadata(
 }
 
 export async function fetchAbbreviatedPackument(
-  packageName: string
+  packageName: string,
+  deadline?: number
 ): Promise<AbbreviatedPackument> {
   validatePackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(packageName)}`;
@@ -176,7 +191,8 @@ export async function fetchAbbreviatedPackument(
         ? `Package "${packageName}" not found on npm. Check the package name is correct.`
         : `npm registry returned status ${status} for "${packageName}".`,
     DEFAULT_REQUEST_TIMEOUT,
-    { Accept: "application/vnd.npm.install-v1+json" }
+    { Accept: "application/vnd.npm.install-v1+json" },
+    deadline
   );
 }
 
@@ -352,14 +368,16 @@ const RAW_README_NAMES = ["README.md", "Readme.md", "readme.md"];
 
 async function fetchText(
   url: string,
-  headers?: Record<string, string>
+  headers: Record<string, string> | undefined,
+  deadline: number
 ): Promise<string | null> {
   try {
     return await fetchWithTimeout(
       url,
       (response) => (response.ok ? response.text() : Promise.resolve(null)),
       DEFAULT_REQUEST_TIMEOUT,
-      headers
+      headers,
+      deadline
     );
   } catch {
     return null;
@@ -390,9 +408,14 @@ export async function fetchGitHubReadme(
       });
     }
   }
+  const deadline = Date.now() + DEFAULT_REQUEST_TIMEOUT;
   return candidates.reduce<Promise<string | null>>(
     (found, candidate) =>
-      found.then((text) => text ?? fetchText(candidate.url, candidate.headers)),
+      found.then((text) =>
+        text !== null || Date.now() >= deadline
+          ? text
+          : fetchText(candidate.url, candidate.headers, deadline)
+      ),
     Promise.resolve(null)
   );
 }

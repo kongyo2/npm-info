@@ -9,6 +9,7 @@ import {
   checkDefinitelyTyped,
   fetchNpmDownloads,
   fetchGitHubReadme,
+  fetchAbbreviatedPackument,
 } from "../src/services/npm-api.js";
 
 describe("validatePackageName", () => {
@@ -433,6 +434,29 @@ describe("fetchResolvedVersion", () => {
     assert.equal(v.version, "2.0.0-rc.1");
   });
 
+  it("gives up on an abbreviated packument whose deadline has passed", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({ name: "pkg" });
+    });
+    await assert.rejects(fetchAbbreviatedPackument("pkg", Date.now() - 1), /timed out/);
+    assert.equal(calls, 0);
+  });
+
+  it("does not retry a 429 when the deadline would be missed", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({}, { status: 429, headers: { "retry-after": "5" } });
+    });
+    await assert.rejects(
+      fetchAbbreviatedPackument("pkg", Date.now() + 2_000),
+      /status 429/
+    );
+    assert.equal(calls, 1);
+  });
+
   it("tolerates non-object dist-tags and versions maps in the fallback", async (t) => {
     t.mock.method(globalThis, "fetch", async (url: unknown) => {
       const u = String(url);
@@ -587,6 +611,18 @@ describe("fetchGitHubReadme", () => {
     assert.deepEqual(seen, [
       "https://api.github.com/repos/vercel/next.js/readme/packages/next",
     ]);
+  });
+
+  it("stops trying README candidates once its overall deadline passes", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"] });
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      t.mock.timers.tick(20_000);
+      return new Response("nope", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("o", "r", "pkg", "develop"), null);
+    assert.equal(calls, 1);
   });
 
   it("returns null when every source fails", async (t) => {

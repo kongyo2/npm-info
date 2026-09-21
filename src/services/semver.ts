@@ -57,7 +57,6 @@ function makeSemver(major: number, minor: number, patch: number): SemVer {
 interface PartialSemver {
   semver: SemVer;
   parts: 0 | 1 | 2 | 3;
-  invalidOrder: boolean;
 }
 
 const WILDCARD = /^[xX*]$/;
@@ -77,17 +76,9 @@ function parsePartial(v: string): PartialSemver | null {
   if (!m) return null;
 
   let parts = 0;
-  let wildcardSeen = false;
-  let invalidOrder = false;
   for (const seg of [m[1], m[2], m[3]]) {
-    if (seg === undefined) break;
-    if (isWildcard(seg)) {
-      wildcardSeen = true;
-    } else if (wildcardSeen) {
-      invalidOrder = true;
-    } else {
-      parts++;
-    }
+    if (seg === undefined || isWildcard(seg)) break;
+    parts++;
   }
   const partCount = parts as 0 | 1 | 2 | 3;
   const major = partCount >= 1 ? Number(m[1]) : 0;
@@ -110,7 +101,6 @@ function parsePartial(v: string): PartialSemver | null {
       prerelease: partCount === 3 ? parsePrerelease(m[4]) : [],
     },
     parts: partCount,
-    invalidOrder,
   };
 }
 
@@ -204,8 +194,6 @@ function parseConstraintBounds(r: string): SemverRange | null {
   const { semver: base, parts } = p;
   const soup = prefix.includes("=") || prefix.length > 1;
   if (soup && parts === 3 && op !== "~" && op !== "^") return null;
-
-  if (p.invalidOrder && op !== "~" && op !== "^") return null;
 
   if (parts === 0) {
     return op === ">" || op === "<" ? rangeNothing() : rangeAll();
@@ -317,10 +305,12 @@ function parseRange(r: string): SemverRange | null {
   if (hyphenExpanded === null) return null;
 
   const normalized = hyphenExpanded
-    .replace(/(?<![<>=v])(>=|<=|>|<) (?!=\s)/g, "$1")
-    .replace(/(?<![<>=v\s])( ?)= (?!=\s)/g, "$1=")
-    .replace(/(\^|~>?)  (?=[0-9xX*v])/g, "$1")
-    .replace(/(\^|~>?) (?!=\s)/g, "$1")
+    .replace(/(?<![<>=v])(>=|<=|>|<) (?=[0-9xX*v]|=(?!\s))/g, "$1")
+    .replace(/(?<![<>=v\s])( ?)= (?=[0-9xX*v]|=(?!\s))/g, "$1=")
+    .replace(/~>?  (?=[0-9xX*v])/g, "~")
+    .replace(/~>? (?!=\s)/g, "~")
+    .replace(/\^  (?=[0-9xX*v])/g, "^")
+    .replace(/\^ (?!=\s)/g, "^")
     .trim();
   if (normalized === "") return rangeAll();
 
@@ -362,6 +352,28 @@ function parseRange(r: string): SemverRange | null {
     }
   }
   return { min, minInclusive, max, maxInclusive };
+}
+
+export function satisfiableAtOrAbove(range: string, floor: string): boolean {
+  const floorVersion = parseSemver(floor);
+  if (!floorVersion) return false;
+  const r = range
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^v(?=\d)/, "");
+  return r.split("||").some((rawSub) => {
+    const parsed = parseRange(rawSub.trim());
+    if (!parsed) return false;
+    if (parsed.min && parsed.max) {
+      const span = cmpSemver(parsed.min, parsed.max);
+      if (span > 0 || (span === 0 && !(parsed.minInclusive && parsed.maxInclusive))) {
+        return false;
+      }
+    }
+    if (!parsed.max) return true;
+    const cmp = cmpSemver(parsed.max, floorVersion);
+    return cmp > 0 || (cmp === 0 && parsed.maxInclusive);
+  });
 }
 
 export function maxSatisfying(versions: string[], range: string): string | null {

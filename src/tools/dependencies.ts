@@ -151,7 +151,7 @@ export async function resolveProductionTree(
           truncatedBy ??= "time";
           return Promise.reject(budgetExhausted);
         }
-        return fetchAbbreviatedPackument(name);
+        return fetchAbbreviatedPackument(name, deadline);
       });
       packuments.set(name, pending);
     }
@@ -182,6 +182,10 @@ export async function resolveProductionTree(
       pkg = await getPackument(name);
     } catch (err) {
       if (err === budgetExhausted) return;
+      if (Date.now() > deadline) {
+        truncatedBy ??= "time";
+        return;
+      }
       warn(`Failed to fetch ${name}: ${errorMessage(err)}`);
       if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
       return;
@@ -273,6 +277,8 @@ export function formatTree(result: ResolveResult, maxDepth: number): string[] {
   const rootEntry = result.tree[result.rootKey];
   if (!rootEntry) {
     lines.push(`Root: ${result.rootKey} (not resolved)`);
+    lines.push("");
+    lines.push(...formatWarnings(result.warnings));
     return lines;
   }
 
@@ -332,12 +338,13 @@ export function formatTree(result: ResolveResult, maxDepth: number): string[] {
   lines.push("```");
   lines.push("");
 
-  if (result.warnings.length > 0) {
-    lines.push(`### Warnings (${result.warnings.length})`, "");
-    for (const w of result.warnings) lines.push(`- ${w}`);
-    lines.push("");
-  }
+  lines.push(...formatWarnings(result.warnings));
   return lines;
+}
+
+function formatWarnings(warnings: string[]): string[] {
+  if (warnings.length === 0) return [];
+  return [`### Warnings (${warnings.length})`, "", ...warnings.map((w) => `- ${w}`), ""];
 }
 
 export function registerDependenciesTool(server: McpServer): void {

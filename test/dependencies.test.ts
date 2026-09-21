@@ -332,6 +332,29 @@ describe("resolveProductionTree", () => {
     assert.equal(result.warnings.length, 0);
   });
 
+  it("marks a fetch that outlives the deadline as truncation, not failure", async (t) => {
+    let clock = 0;
+    t.mock.method(Date, "now", () => clock);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const name = decodeURIComponent(String(url).split("/").pop() ?? "");
+      clock += 500;
+      if (name === "root") {
+        return new Response(
+          JSON.stringify(packument("root", { "1.0.0": { slow: "^1.0.0" } })),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      throw new Error("socket hang up");
+    });
+    const result = await resolveProductionTree("root", "1.0.0", 2, {
+      maxPackages: 100,
+      timeLimitMs: 600,
+    });
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncatedBy, "time");
+    assert.deepEqual(result.warnings, []);
+  });
+
   it("truncates when the time budget is already spent", async (t) => {
     stubRegistry(t, {});
     const result = await resolveProductionTree("root", "1.0.0", 3, {
@@ -344,6 +367,20 @@ describe("resolveProductionTree", () => {
 });
 
 describe("formatTree", () => {
+  it("keeps the warnings when the root itself could not be resolved", () => {
+    const result: ResolveResult = {
+      rootKey: "root@1.0.0",
+      tree: {},
+      hintToKey: new Map(),
+      warnings: ['Failed to fetch root: npm registry returned status 503 for "root".'],
+      truncated: false,
+    };
+    const text = formatTree(result, 2).join("\n");
+    assert.match(text, /Root: root@1\.0\.0 \(not resolved\)/);
+    assert.match(text, /### Warnings \(1\)/);
+    assert.match(text, /status 503/);
+  });
+
   it("renders the resolved tree, truncation note, and warnings", () => {
     const result: ResolveResult = {
       rootKey: "root@1.0.0",

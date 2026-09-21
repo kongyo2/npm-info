@@ -5,7 +5,7 @@ import {
   checkDefinitelyTyped,
   typesPackageName,
 } from "../services/npm-api.js";
-import { maxSatisfying } from "../services/semver.js";
+import { satisfiableAtOrAbove } from "../services/semver.js";
 import type { NpmPackageVersion, PackageExports } from "../types.js";
 import { errorMessage, errorResult, textResult } from "./shared.js";
 
@@ -206,7 +206,7 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
   return { source: "none", exportsSubpathCount: 0, misorderedSubpaths: [] };
 }
 
-const TYPESCRIPT_PROBES = ["4.0.0", "5.0.0", "6.0.0"];
+const OLDEST_SUPPORTED_TYPESCRIPT = "4.0.0";
 
 export function typesVersionsCoverCurrentTypeScript(typesVersions: unknown): boolean {
   if (
@@ -216,8 +216,8 @@ export function typesVersionsCoverCurrentTypeScript(typesVersions: unknown): boo
   ) {
     return false;
   }
-  return Object.keys(typesVersions).some(
-    (selector) => maxSatisfying(TYPESCRIPT_PROBES, selector) !== null
+  return Object.keys(typesVersions).some((selector) =>
+    satisfiableAtOrAbove(selector, OLDEST_SUPPORTED_TYPESCRIPT)
   );
 }
 

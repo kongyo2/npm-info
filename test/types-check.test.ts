@@ -229,6 +229,14 @@ describe("detectTypesEntry", () => {
       true
     );
     assert.equal(typesVersionsCoverCurrentTypeScript({ "<2.0": {}, ">=4.1": {} }), true);
+    assert.equal(
+      typesVersionsCoverCurrentTypeScript({ ">=5.1 <6": { "*": ["a/*"] } }),
+      true
+    );
+    assert.equal(
+      typesVersionsCoverCurrentTypeScript({ ">=5.5.2 <5.6": { "*": ["a/*"] } }),
+      true
+    );
     assert.equal(typesVersionsCoverCurrentTypeScript("nope"), false);
   });
 
