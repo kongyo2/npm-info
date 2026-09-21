@@ -57,9 +57,12 @@ export function formatDeps(
 }
 
 function depsRecord(value: unknown): Record<string, string> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, string>)
-    : {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, spec] of Object.entries(value)) {
+    if (typeof spec === "string") out[key] = spec;
+  }
+  return out;
 }
 
 interface TreeNode {

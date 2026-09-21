@@ -163,6 +163,32 @@ describe("resolveProductionTree", () => {
     assert.match(result.warnings[0], /Failed to fetch bad/);
   });
 
+  it("ignores non-string dependency spec values", async (t) => {
+    const fixtures: Record<string, AbbreviatedPackument> = {
+      root: {
+        name: "root",
+        "dist-tags": { latest: "1.0.0" },
+        versions: {
+          "1.0.0": {
+            name: "root",
+            version: "1.0.0",
+            dependencies: {
+              a: "^1.0.0",
+              weird: { url: "https://x" },
+              nil: null,
+            } as unknown as Record<string, string>,
+          },
+        },
+      },
+      a: packument("a", { "1.0.0": {} }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    assert.ok(result.tree["a@1.0.0"]);
+    const text = formatTree(result, 2).join("\n");
+    assert.doesNotMatch(text, /weird|nil/);
+  });
+
   it("dedups identical warnings", async (t) => {
     const fixtures = {
       root: packument("root", {
