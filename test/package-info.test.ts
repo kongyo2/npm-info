@@ -148,6 +148,10 @@ describe("formatMaintainer", () => {
     assert.equal(formatMaintainer("octocat"), "octocat");
     assert.equal(formatMaintainer({ name: "oc", email: "oc@x.dev" }), "oc <oc@x.dev>");
     assert.equal(formatMaintainer({}), "unknown");
+    assert.equal(
+      formatMaintainer({ name: 42, email: { bad: true } } as unknown as { name: string }),
+      "unknown"
+    );
   });
 });
 

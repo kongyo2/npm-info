@@ -85,7 +85,9 @@ export function formatKeywords(
 
 export function formatMaintainer(m: { name?: string; email?: string } | string): string {
   if (typeof m === "string") return m;
-  return `${m.name ?? "unknown"}${m.email ? ` <${m.email}>` : ""}`;
+  const name = typeof m.name === "string" && m.name ? m.name : "unknown";
+  const email = typeof m.email === "string" && m.email ? ` <${m.email}>` : "";
+  return `${name}${email}`;
 }
 
 export function registerPackageInfoTool(server: McpServer): void {
