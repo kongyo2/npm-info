@@ -105,4 +105,15 @@ describe("formatScoreReport", () => {
     assert.match(text, /\*\*Overall Score:\*\* N\/A/);
     assert.ok(STALE_AFTER_DAYS > 0);
   });
+
+  it("omits the analyzed line when npms omits analyzedAt", () => {
+    const text = formatScoreReport({
+      packageName: "pkg",
+      npms: { ...fullNpms, analyzedAt: undefined as unknown as string },
+      downloads: {},
+      now: NOW,
+    }).join("\n");
+    assert.doesNotMatch(text, /undefined/);
+    assert.doesNotMatch(text, /\*\*Analyzed:\*\*/);
+  });
 });

@@ -179,7 +179,7 @@ export function formatScoreReport(input: ScoreReportInput): string[] {
     lines.push("");
   }
 
-  if (npms) {
+  if (npms && npms.analyzedAt) {
     const age = daysSince(npms.analyzedAt, now);
     lines.push(
       `**Analyzed:** ${npms.analyzedAt}${age !== null && age >= 0 ? ` (${age} days ago)` : ""}`
