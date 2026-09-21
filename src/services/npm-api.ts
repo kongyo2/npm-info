@@ -87,10 +87,17 @@ async function fetchOnce<T>(
 }
 
 function retryDelayMs(retryAfter: string | null): number {
-  const seconds = Number(retryAfter);
-  return Number.isFinite(seconds) && seconds > 0
-    ? Math.min(seconds * 1000, MAX_RETRY_WAIT_MS)
-    : 1000;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+    }
+    const dateMs = Date.parse(retryAfter);
+    if (!Number.isNaN(dateMs)) {
+      return Math.min(Math.max(dateMs - Date.now(), 0), MAX_RETRY_WAIT_MS);
+    }
+  }
+  return 1000;
 }
 
 async function fetchWithTimeout<T>(

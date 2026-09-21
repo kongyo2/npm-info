@@ -147,6 +147,51 @@ describe("fetchPackageMetadata", () => {
     assert.equal(calls, 2);
   });
 
+  it("honors an HTTP-date Retry-After header", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: {
+                "retry-after": new Date(Date.now() + 2000).toUTCString(),
+              },
+            }
+          )
+        : jsonResponse({ name: "react" });
+    });
+    const pending = fetchPackageMetadata("react");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1);
+    t.mock.timers.tick(2000);
+    const meta = await pending;
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("treats a past HTTP-date Retry-After as no wait", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" },
+            }
+          )
+        : jsonResponse({ name: "react" });
+    });
+    const meta = await fetchPackageMetadata("react");
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
   it("does not retry non-retryable statuses", async (t) => {
     let calls = 0;
     t.mock.method(globalThis, "fetch", async () => {
