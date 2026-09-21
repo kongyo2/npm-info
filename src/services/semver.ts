@@ -296,8 +296,7 @@ function expandHyphenRanges(range: string): string | null {
         invalid = true;
         return "";
       }
-      const min =
-        lo.parts === 0 ? "" : `>=${loRaw.replace(/^v(?=[0-9xX*])/, "")}`;
+      const min = lo.parts === 0 ? "" : `>=${loRaw.replace(/^v(?=[0-9xX*])/, "")}`;
       let max = "";
       if (hi.parts === 3) {
         max = `<=${hiRaw.replace(/^v(?=[0-9xX*])/, "")}`;
