@@ -20,13 +20,19 @@ function formatLicenseRef(l: LicenseRef): string | undefined {
 }
 
 export function formatLicense(
-  license: string | LicenseRef | LicenseRef[] | undefined,
-  licenses?: LicenseRef[]
+  license: string | LicenseRef | Array<LicenseRef | string> | undefined,
+  licenses?: Array<LicenseRef | string>
 ): string | undefined {
   if (typeof license === "string") return license;
   const list = Array.isArray(license) ? license : license ? [license] : (licenses ?? []);
   const names = list
-    .map((l) => (l && typeof l === "object" ? formatLicenseRef(l) : undefined))
+    .map((l) =>
+      typeof l === "string"
+        ? l
+        : l && typeof l === "object"
+          ? formatLicenseRef(l)
+          : undefined
+    )
     .filter((s): s is string => !!s);
   return names.length > 0 ? names.join(", ") : undefined;
 }
@@ -83,8 +89,11 @@ export function formatKeywords(
   return keywords.join(", ");
 }
 
-export function formatMaintainer(m: { name?: string; email?: string } | string): string {
+export function formatMaintainer(
+  m: { name?: string; email?: string } | string | null | undefined
+): string {
   if (typeof m === "string") return m;
+  if (!m || typeof m !== "object") return "unknown";
   const name = typeof m.name === "string" && m.name ? m.name : "unknown";
   const email = typeof m.email === "string" && m.email ? ` <${m.email}>` : "";
   return `${name}${email}`;

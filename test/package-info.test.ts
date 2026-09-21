@@ -35,6 +35,11 @@ describe("formatLicense", () => {
     );
   });
 
+  it("keeps string entries inside license and licenses arrays", () => {
+    assert.equal(formatLicense(["MIT", { type: "Apache-2.0" }]), "MIT, Apache-2.0");
+    assert.equal(formatLicense(undefined, ["MIT", "Apache-2.0"]), "MIT, Apache-2.0");
+  });
+
   it("falls back to the deprecated `licenses` array", () => {
     assert.equal(
       formatLicense(undefined, [
@@ -146,6 +151,7 @@ describe("formatKeywords", () => {
 describe("formatMaintainer", () => {
   it("handles string and object maintainers", () => {
     assert.equal(formatMaintainer("octocat"), "octocat");
+    assert.equal(formatMaintainer(null), "unknown");
     assert.equal(formatMaintainer({ name: "oc", email: "oc@x.dev" }), "oc <oc@x.dev>");
     assert.equal(formatMaintainer({}), "unknown");
     assert.equal(

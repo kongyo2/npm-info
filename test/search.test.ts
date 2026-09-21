@@ -63,6 +63,15 @@ describe("formatSearchResults", () => {
     const text = formatSearchResults("q", result).join("\n");
     assert.match(text, /quality=90% popularity=80% maintenance=50%/);
   });
+  it("skips null entries in the objects array", () => {
+    const text = formatSearchResults("q", {
+      total: 2,
+      objects: [null, hit({ name: "real" })] as unknown as NpmSearchResult["objects"],
+    }).join("\n");
+    assert.match(text, /## real/);
+    assert.doesNotMatch(text, /null/);
+  });
+
   it("tolerates sparse hits without crashing or printing NaN", () => {
     const text = formatSearchResults("q", {
       total: 3,

@@ -89,7 +89,7 @@ async function fetchOnce<T>(
 function retryDelayMs(retryAfter: string | null): number {
   if (retryAfter) {
     const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds > 0) {
+    if (Number.isFinite(seconds) && seconds >= 0) {
       return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
     }
     const dateMs = Date.parse(retryAfter);
@@ -116,7 +116,7 @@ async function fetchWithTimeout<T>(
       if (!RETRYABLE_STATUSES.has(response.status)) {
         return { done: true, value: await consume(response) };
       }
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       return { done: false, retryAfter: response.headers.get("retry-after") };
     }
   );
@@ -310,8 +310,9 @@ export function extractGitHubRepo(
     owner: match[1],
     repo: match[2],
   };
-  if (typeof repoObj?.directory === "string") {
-    result.directory = repoObj.directory;
+  const directory = repoObj?.directory ?? repoObj?.path;
+  if (typeof directory === "string" && directory) {
+    result.directory = directory;
   }
   return result;
 }

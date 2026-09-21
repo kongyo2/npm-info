@@ -62,9 +62,7 @@ function isWildcard(segment: string | undefined): boolean {
 }
 
 function parsePartial(v: string): PartialSemver | null {
-  const stripped = v
-    .replace(/^v/, "")
-    .replace(/\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*/g, "");
+  const stripped = v.replace(/^v/, "").replace(/\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*/g, "");
   const m = stripped.match(
     new RegExp(
       `^((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:-${PRERELEASE})?)?)?$`

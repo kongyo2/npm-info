@@ -108,10 +108,24 @@ describe("extractGitHubRepo", () => {
       owner: "bower",
       repo: "bower",
     });
-    assert.deepEqual(extractGitHubRepo({ type: "git", url: "node-formidable/formidable" }), {
-      owner: "node-formidable",
-      repo: "formidable",
-    });
+    assert.deepEqual(
+      extractGitHubRepo({ type: "git", url: "node-formidable/formidable" }),
+      {
+        owner: "node-formidable",
+        repo: "formidable",
+      }
+    );
+  });
+
+  it("accepts the legacy `path` field as the monorepo directory", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "git+ssh://git@github.com/tapjs/tapjs.git",
+        path: "src/tap",
+      }),
+      { owner: "tapjs", repo: "tapjs", directory: "src/tap" }
+    );
   });
 
   it("returns null for non-GitHub hosts", () => {
@@ -214,6 +228,39 @@ describe("fetchPackageMetadata", () => {
             }
           )
         : jsonResponse({ name: "react" });
+    });
+    const meta = await fetchPackageMetadata("react");
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("retries immediately on Retry-After: 0", async (t) => {
+    let calls = 0;
+    const started = Date.now();
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse({}, { status: 429, headers: { "retry-after": "0" } })
+        : jsonResponse({ name: "react" });
+    });
+    await fetchPackageMetadata("react");
+    assert.equal(calls, 2);
+    assert.ok(Date.now() - started < 900);
+  });
+
+  it("still retries when draining the retried body fails", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      if (calls === 1) {
+        const response = new Response("{}", {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+        response.body?.getReader();
+        return response;
+      }
+      return jsonResponse({ name: "react" });
     });
     const meta = await fetchPackageMetadata("react");
     assert.equal(meta.name, "react");

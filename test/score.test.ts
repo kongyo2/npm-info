@@ -112,6 +112,26 @@ describe("formatScoreReport", () => {
     assert.ok(STALE_AFTER_DAYS > 0);
   });
 
+  it("renders N/A rather than crashing on non-finite metrics", () => {
+    const text = formatScoreReport({
+      packageName: "pkg",
+      npms: {
+        analyzedAt: "2023-01-13T00:00:00.000Z",
+        score: { final: Number.NaN },
+        evaluation: {
+          popularity: { downloadsAcceleration: null, downloadsCount: Number.NaN },
+        },
+      } as unknown as NpmsPackageResponse,
+      downloads: {
+        lastWeek: { downloads: Number.NaN, start: "s", end: "e", package: "pkg" },
+      },
+      now: NOW,
+    }).join("\n");
+    assert.match(text, /\*\*Overall Score:\*\* N\/A/);
+    assert.doesNotMatch(text, /NaN/);
+    assert.doesNotMatch(text, /Download Acceleration/);
+  });
+
   it("omits the analyzed line when npms omits analyzedAt", () => {
     const text = formatScoreReport({
       packageName: "pkg",

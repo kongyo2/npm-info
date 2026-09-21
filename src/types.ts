@@ -21,10 +21,12 @@ export interface NpmPackageVersion {
   name: string;
   version: string;
   description?: string;
-  license?: string | LicenseRef | LicenseRef[];
-  licenses?: LicenseRef[];
+  license?: string | LicenseRef | Array<LicenseRef | string>;
+  licenses?: Array<LicenseRef | string>;
   homepage?: string;
-  repository?: { type?: string; url?: string; directory?: string } | string;
+  repository?:
+    | { type?: string; url?: string; directory?: string; path?: string }
+    | string;
   keywords?: string[] | string;
   author?: { name?: string; email?: string; url?: string } | string;
   maintainers?: Array<{ name?: string; email?: string } | string>;
@@ -58,9 +60,11 @@ export interface NpmRegistryResponse {
   maintainers?: Array<{ name?: string; email?: string } | string>;
   homepage?: string;
   keywords?: string[] | string;
-  repository?: { type?: string; url?: string; directory?: string } | string;
-  license?: string | LicenseRef | LicenseRef[];
-  licenses?: LicenseRef[];
+  repository?:
+    | { type?: string; url?: string; directory?: string; path?: string }
+    | string;
+  license?: string | LicenseRef | Array<LicenseRef | string>;
+  licenses?: Array<LicenseRef | string>;
   readme?: string;
   readmeFilename?: string;
 }

@@ -58,7 +58,7 @@ export function formatSearchResults(query: string, result: NpmSearchResult): str
   ];
 
   for (const obj of objects) {
-    const pkg = obj.package;
+    const pkg = obj?.package;
     if (!pkg?.name) continue;
     lines.push(pkg.version ? `## ${pkg.name} (v${pkg.version})` : `## ${pkg.name}`);
     if (pkg.description) lines.push(`${pkg.description}`);

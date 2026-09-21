@@ -18,12 +18,12 @@ const ScoreInputSchema = {
 };
 
 function pct(val: number | undefined): string {
-  if (val === undefined) return "N/A";
+  if (typeof val !== "number" || !Number.isFinite(val)) return "N/A";
   return `${(val * 100).toFixed(0)}%`;
 }
 
 function num(val: number | undefined): string {
-  if (val === undefined) return "N/A";
+  if (typeof val !== "number" || !Number.isFinite(val)) return "N/A";
   return Math.round(val).toLocaleString("en-US");
 }
 
@@ -101,10 +101,9 @@ export function formatScoreReport(input: ScoreReportInput): string[] {
         lines.push(
           `- **Downloads (30d, at analysis time):** ${num(ev.popularity.downloadsCount)}`
         );
-      if (ev.popularity.downloadsAcceleration !== undefined)
-        lines.push(
-          `- **Download Acceleration:** ${ev.popularity.downloadsAcceleration.toFixed(1)}`
-        );
+      const acceleration = ev.popularity.downloadsAcceleration;
+      if (typeof acceleration === "number" && Number.isFinite(acceleration))
+        lines.push(`- **Download Acceleration:** ${acceleration.toFixed(1)}`);
       if (ev.popularity.dependentsCount !== undefined)
         lines.push(`- **Dependents:** ${num(ev.popularity.dependentsCount)}`);
       lines.push("");
