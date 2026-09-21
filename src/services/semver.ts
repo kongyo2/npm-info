@@ -97,8 +97,13 @@ function parsePartial(v: string): PartialSemver | null {
   if (!m) return null;
   // Reject leading zeros in numeric parts and in numeric prerelease ids,
   // like node-semver does (`01.2.3`, `=01`, `1.2.3-01` are all invalid).
+  // A wildcard may not be followed by a numeric part either: `1.x.2` and
+  // `x.2` are invalid in node-semver rather than shorthand for `1.x` / `x`.
+  let seenWildcard = false;
   for (const part of [m[1], m[2], m[3]]) {
-    if (part !== undefined && /^\d+$/.test(part) && !NUMERIC.test(part)) {
+    if (part === undefined || isWildcard(part)) {
+      seenWildcard = true;
+    } else if (seenWildcard || !NUMERIC.test(part)) {
       return null;
     }
   }

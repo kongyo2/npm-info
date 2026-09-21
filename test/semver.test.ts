@@ -53,6 +53,16 @@ describe("maxSatisfying: exact versions", () => {
     assert.equal(maxSatisfying(VERSIONS, "1.2.3+"), null);
     assert.equal(maxSatisfying(VERSIONS, "1.2.3+build.7"), "1.2.3");
   });
+
+  it("rejects a numeric part after a wildcard, like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.x.2"), null);
+    assert.equal(maxSatisfying(VERSIONS, "x.2"), null);
+    assert.equal(maxSatisfying(VERSIONS, ">=1.x.2"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.*.0 - 2"), null);
+    // Wildcards in trailing positions remain valid.
+    assert.equal(maxSatisfying(VERSIONS, "1.x.x"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.2.x"), "1.2.4");
+  });
 });
 
 describe("maxSatisfying: caret ranges", () => {
