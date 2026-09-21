@@ -93,4 +93,36 @@ describe("formatSearchResults", () => {
     } as unknown as NpmSearchResult);
     assert.match(lines[0], /No packages found matching "q"/);
   });
+
+  it("skips hits with non-string fields instead of printing garbage", () => {
+    const text = formatSearchResults("q", {
+      total: 1,
+      objects: [
+        {
+          package: {
+            name: "ok",
+            version: 42,
+            description: { x: 1 },
+            keywords: ["fine", 9],
+            links: { homepage: { u: "x" }, repository: "https://r.dev" },
+            date: { $date: "x" },
+          },
+        },
+      ],
+    } as unknown as NpmSearchResult).join("\n");
+    assert.match(text, /## ok\n/);
+    assert.match(text, /\*\*Keywords:\*\* fine/);
+    assert.match(text, /\*\*Repository:\*\* https:\/\/r\.dev/);
+    assert.doesNotMatch(text, /object Object|v42|Published|Homepage|\$date/);
+  });
+
+  it("falls back to the empty message when every hit is unusable", () => {
+    const lines = formatSearchResults("q", {
+      total: 4,
+      objects: [{ package: { name: 42 } }, { package: null }, { package: {} }],
+    } as unknown as NpmSearchResult);
+    assert.deepEqual(lines, [
+      'No packages found matching "q". Try broader search terms.',
+    ]);
+  });
 });

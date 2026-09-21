@@ -33,12 +33,21 @@ export function collectVersionRows(
   metadata: NpmRegistryResponse,
   limit: number
 ): { rows: VersionRow[]; total: number } {
-  const allVersions = metadata.versions ?? {};
-  const time = metadata.time ?? {};
+  const allVersions =
+    metadata.versions &&
+    typeof metadata.versions === "object" &&
+    !Array.isArray(metadata.versions)
+      ? metadata.versions
+      : {};
+  const time =
+    metadata.time && typeof metadata.time === "object" && !Array.isArray(metadata.time)
+      ? metadata.time
+      : {};
   const total = Object.keys(allVersions).length;
 
   const tagLookup = new Map<string, string[]>();
   for (const [tag, ver] of Object.entries(metadata["dist-tags"] ?? {})) {
+    if (typeof ver !== "string") continue;
     const existing = tagLookup.get(ver) ?? [];
     existing.push(tag);
     tagLookup.set(ver, existing);
@@ -54,7 +63,7 @@ export function collectVersionRows(
     .slice(0, limit)
     .map((ver) => ({
       version: ver,
-      date: time[ver],
+      date: typeof time[ver] === "string" ? time[ver] : undefined,
       tags: tagLookup.get(ver) ?? [],
       deprecated:
         typeof allVersions[ver]?.deprecated === "string"

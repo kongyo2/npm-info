@@ -14,9 +14,15 @@ const PackageInfoInputSchema = {
 };
 
 function formatLicenseRef(l: LicenseRef): string | undefined {
-  const name = l.type ?? l.name;
-  if (!name) return l.url;
-  return l.url ? `${name} (${l.url})` : name;
+  const name =
+    typeof l.type === "string" && l.type
+      ? l.type
+      : typeof l.name === "string" && l.name
+        ? l.name
+        : undefined;
+  const url = typeof l.url === "string" && l.url ? l.url : undefined;
+  if (!name) return url;
+  return url ? `${name} (${url})` : name;
 }
 
 export function formatLicense(
@@ -63,10 +69,11 @@ export function formatRepository(
 export function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
   if (!author) return undefined;
   if (typeof author === "string") return author;
+  if (typeof author !== "object") return undefined;
   const parts: string[] = [];
-  if (author.name) parts.push(author.name);
-  if (author.email) parts.push(`<${author.email}>`);
-  if (author.url) parts.push(`(${author.url})`);
+  if (typeof author.name === "string" && author.name) parts.push(author.name);
+  if (typeof author.email === "string" && author.email) parts.push(`<${author.email}>`);
+  if (typeof author.url === "string" && author.url) parts.push(`(${author.url})`);
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
@@ -74,10 +81,13 @@ export function formatEngines(engines: NpmPackageVersion["engines"]): string | u
   if (!engines) return undefined;
   if (typeof engines === "string") return engines;
   if (Array.isArray(engines)) {
-    return engines.length > 0 ? engines.join(", ") : undefined;
+    const items = engines.filter((e): e is string => typeof e === "string" && e !== "");
+    return items.length > 0 ? items.join(", ") : undefined;
   }
   if (typeof engines !== "object") return undefined;
-  const parts = Object.entries(engines).map(([k, v]) => `${k}: ${v}`);
+  const parts = Object.entries(engines)
+    .filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")
+    .map(([k, v]) => `${k}: ${v}`);
   return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
@@ -86,7 +96,8 @@ export function formatKeywords(
 ): string | undefined {
   if (typeof keywords === "string") return keywords || undefined;
   if (!Array.isArray(keywords) || keywords.length === 0) return undefined;
-  return keywords.join(", ");
+  const items = keywords.filter((k): k is string => typeof k === "string" && k !== "");
+  return items.length > 0 ? items.join(", ") : undefined;
 }
 
 export function formatMaintainer(
@@ -132,14 +143,21 @@ Examples:
     async ({ package_name }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
-        const latestTag = metadata["dist-tags"]?.latest;
+        const latestTagRaw = metadata["dist-tags"]?.latest;
+        const latestTag = typeof latestTagRaw === "string" ? latestTagRaw : undefined;
+        const latestCandidate = latestTag ? metadata.versions?.[latestTag] : undefined;
         const latestVersion =
-          latestTag && metadata.versions?.[latestTag]
-            ? metadata.versions[latestTag]
+          latestCandidate && typeof latestCandidate === "object"
+            ? latestCandidate
             : undefined;
 
-        const lines: string[] = [`# ${metadata.name}`];
-        if (metadata.description) lines.push("", metadata.description);
+        const name =
+          typeof metadata.name === "string" && metadata.name
+            ? metadata.name
+            : package_name;
+        const lines: string[] = [`# ${name}`];
+        if (typeof metadata.description === "string" && metadata.description)
+          lines.push("", metadata.description);
         lines.push("");
 
         if (latestTag) lines.push(`**Latest Version:** ${latestTag}`);
@@ -150,7 +168,8 @@ Examples:
         );
         if (license) lines.push(`**License:** ${license}`);
 
-        if (metadata.homepage) lines.push(`**Homepage:** ${metadata.homepage}`);
+        if (typeof metadata.homepage === "string" && metadata.homepage)
+          lines.push(`**Homepage:** ${metadata.homepage}`);
 
         const repoUrl = formatRepository(metadata.repository);
         if (repoUrl) lines.push(`**Repository:** ${repoUrl}`);
@@ -166,21 +185,22 @@ Examples:
 
         if (metadata["dist-tags"]) {
           const tags = Object.entries(metadata["dist-tags"])
+            .filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")
             .map(([tag, ver]) => `${tag}: ${ver}`)
             .join(", ");
-          lines.push(`**Dist-tags:** ${tags}`);
+          if (tags) lines.push(`**Dist-tags:** ${tags}`);
         }
 
-        const publishDate = metadata.time?.[latestTag ?? ""];
-        if (publishDate) {
+        const publishDate = latestTag ? metadata.time?.[latestTag] : undefined;
+        if (typeof publishDate === "string" && publishDate) {
           lines.push(`**Last Published:** ${publishDate}`);
         }
         const createdDate = metadata.time?.created;
-        if (createdDate) {
+        if (typeof createdDate === "string" && createdDate) {
           lines.push(`**Created:** ${createdDate}`);
         }
 
-        if (metadata.maintainers?.length) {
+        if (Array.isArray(metadata.maintainers) && metadata.maintainers.length) {
           lines.push("");
           lines.push("**Maintainers:**");
           for (const m of metadata.maintainers.slice(0, 10)) {
@@ -192,8 +212,20 @@ Examples:
         }
 
         if (latestVersion) {
-          const depCount = Object.keys(latestVersion.dependencies ?? {}).length;
-          const peerCount = Object.keys(latestVersion.peerDependencies ?? {}).length;
+          const depCount = Object.keys(
+            typeof latestVersion.dependencies === "object" &&
+              latestVersion.dependencies !== null &&
+              !Array.isArray(latestVersion.dependencies)
+              ? latestVersion.dependencies
+              : {}
+          ).length;
+          const peerCount = Object.keys(
+            typeof latestVersion.peerDependencies === "object" &&
+              latestVersion.peerDependencies !== null &&
+              !Array.isArray(latestVersion.peerDependencies)
+              ? latestVersion.peerDependencies
+              : {}
+          ).length;
           lines.push("");
           lines.push(
             `**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`

@@ -77,4 +77,24 @@ describe("collectVersionRows", () => {
     const { rows } = collectVersionRows(meta, 20);
     assert.equal(rows[0].deprecated, undefined);
   });
+
+  it("ignores non-string time and dist-tag values", () => {
+    const meta = metadata(["1.0.0"], { "1.0.0": 12345 } as never);
+    meta["dist-tags"] = { latest: "1.0.0", bad: 7 } as never;
+    const { rows } = collectVersionRows(meta, 20);
+    assert.equal(rows[0].date, undefined);
+    assert.deepEqual(rows[0].tags, ["latest"]);
+  });
+
+  it("tolerates non-object versions/time fields", () => {
+    const meta = {
+      name: "pkg",
+      "dist-tags": {},
+      versions: "1.0.0",
+      time: ["2020-01-01"],
+    } as unknown as NpmRegistryResponse;
+    const { rows, total } = collectVersionRows(meta, 20);
+    assert.equal(total, 0);
+    assert.deepEqual(rows, []);
+  });
 });

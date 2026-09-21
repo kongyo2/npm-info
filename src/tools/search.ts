@@ -50,31 +50,48 @@ export function formatSearchResults(query: string, result: NpmSearchResult): str
     return [`No packages found matching "${query}". Try broader search terms.`];
   }
 
-  const lines: string[] = [
+  const entryLines: string[] = [];
+  for (const obj of objects) {
+    const pkg = obj?.package;
+    if (!pkg || typeof pkg.name !== "string" || !pkg.name) continue;
+    entryLines.push(
+      typeof pkg.version === "string" && pkg.version
+        ? `## ${pkg.name} (v${pkg.version})`
+        : `## ${pkg.name}`
+    );
+    if (typeof pkg.description === "string" && pkg.description)
+      entryLines.push(`${pkg.description}`);
+    entryLines.push("");
+    const keywords = Array.isArray(pkg.keywords)
+      ? pkg.keywords.filter((k): k is string => typeof k === "string" && k !== "")
+      : [];
+    if (keywords.length > 0) {
+      entryLines.push(`**Keywords:** ${keywords.join(", ")}`);
+    }
+    const homepage = pkg.links?.homepage;
+    const repository = pkg.links?.repository;
+    if (typeof homepage === "string" && homepage)
+      entryLines.push(`**Homepage:** ${homepage}`);
+    if (typeof repository === "string" && repository)
+      entryLines.push(`**Repository:** ${repository}`);
+    const scoreLine = formatScoreLine(obj.score);
+    if (scoreLine) entryLines.push(scoreLine);
+    if (typeof pkg.date === "string" && pkg.date)
+      entryLines.push(`**Published:** ${pkg.date}`);
+    entryLines.push("");
+  }
+
+  if (entryLines.length === 0) {
+    return [`No packages found matching "${query}". Try broader search terms.`];
+  }
+
+  return [
     `# npm Search Results: "${query}"`,
     "",
     `Found ${total} packages (showing ${objects.length})`,
     "",
+    ...entryLines,
   ];
-
-  for (const obj of objects) {
-    const pkg = obj?.package;
-    if (!pkg?.name) continue;
-    lines.push(pkg.version ? `## ${pkg.name} (v${pkg.version})` : `## ${pkg.name}`);
-    if (pkg.description) lines.push(`${pkg.description}`);
-    lines.push("");
-    if (Array.isArray(pkg.keywords) && pkg.keywords.length > 0) {
-      lines.push(`**Keywords:** ${pkg.keywords.join(", ")}`);
-    }
-    if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
-    if (pkg.links?.repository) lines.push(`**Repository:** ${pkg.links.repository}`);
-    const scoreLine = formatScoreLine(obj.score);
-    if (scoreLine) lines.push(scoreLine);
-    if (pkg.date) lines.push(`**Published:** ${pkg.date}`);
-    lines.push("");
-  }
-
-  return lines;
 }
 
 export function registerSearchTool(server: McpServer): void {

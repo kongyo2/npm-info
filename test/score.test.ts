@@ -179,7 +179,7 @@ describe("npm_package_score handler", () => {
       },
     } as unknown as McpServer);
     assert.ok(handler);
-    t.mock.method(globalThis, "fetch", async (input) => {
+    t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => {
       const url = String(input);
       if (url.includes("api.npms.io")) {
         return new Response("not found", { status: 404 });
