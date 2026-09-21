@@ -1,6 +1,14 @@
 import { describe, it } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { resolveDependencySpec } from "../src/tools/dependencies.js";
+import {
+  resolveDependencySpec,
+  formatDeps,
+  formatTree,
+  resolveProductionTree,
+} from "../src/tools/dependencies.js";
+import type { ResolveResult } from "../src/tools/dependencies.js";
+import type { AbbreviatedPackument } from "../src/types.js";
 
 describe("resolveDependencySpec", () => {
   it("passes through standard registry ranges", () => {
@@ -57,5 +65,183 @@ describe("resolveDependencySpec", () => {
     assert.equal(resolveDependencySpec("foo", "github:user/repo"), null);
     assert.equal(resolveDependencySpec("foo", "user/repo#branch"), null);
     assert.equal(resolveDependencySpec("foo", "user/repo"), null);
+  });
+
+  it("rejects non-registry protocols (catalog/jsr/portal/patch)", () => {
+    assert.equal(resolveDependencySpec("foo", "catalog:default"), null);
+    assert.equal(resolveDependencySpec("foo", "jsr:@scope/pkg@^1"), null);
+    assert.equal(resolveDependencySpec("foo", "portal:../local"), null);
+    assert.equal(resolveDependencySpec("foo", "patch:foo@1.0.0#./fix.patch"), null);
+  });
+});
+
+describe("formatDeps", () => {
+  it("sorts entries and marks optional peers", () => {
+    const lines = formatDeps(
+      { zebra: "^1.0.0", alpha: "^2.0.0" },
+      "Peer Dependencies",
+      new Set(["alpha"])
+    );
+    assert.equal(lines[0], "### Peer Dependencies (2)");
+    assert.equal(lines[2], "- alpha: ^2.0.0 (optional)");
+    assert.equal(lines[3], "- zebra: ^1.0.0");
+  });
+
+  it("returns no lines for empty or missing maps", () => {
+    assert.deepEqual(formatDeps({}, "Dependencies"), []);
+    assert.deepEqual(formatDeps(undefined, "Dependencies"), []);
+  });
+});
+
+function packument(
+  name: string,
+  versions: Record<string, Record<string, string>>
+): AbbreviatedPackument {
+  const names = Object.keys(versions);
+  return {
+    name,
+    "dist-tags": { latest: names[names.length - 1] },
+    versions: Object.fromEntries(
+      Object.entries(versions).map(([v, dependencies]) => [
+        v,
+        { name, version: v, dependencies },
+      ])
+    ),
+  };
+}
+
+/** Stub the registry so every abbreviated-packument lookup hits `fixtures`. */
+function stubRegistry(
+  t: TestContext,
+  fixtures: Record<string, AbbreviatedPackument>,
+  calls: string[] = []
+): string[] {
+  t.mock.method(globalThis, "fetch", async (url: unknown) => {
+    const name = decodeURIComponent(String(url).split("/").pop() ?? "");
+    calls.push(name);
+    const found = fixtures[name];
+    if (!found) {
+      return new Response(JSON.stringify("not found"), { status: 404 });
+    }
+    return new Response(JSON.stringify(found), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  return calls;
+}
+
+describe("resolveProductionTree", () => {
+  it("resolves a transitive tree and dedups in-flight packument fetches", async (t) => {
+    const fixtures = {
+      root: packument("root", { "1.0.0": { a: "^1.0.0", b: "^1.0.0" } }),
+      a: packument("a", { "1.0.0": { shared: "^1.0.0" } }),
+      b: packument("b", { "1.0.0": { shared: "*" } }),
+      shared: packument("shared", { "1.0.0": {} }),
+    };
+    const calls = stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 3);
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.warnings, []);
+    assert.deepEqual(Object.keys(result.tree).sort(), [
+      "a@1.0.0",
+      "b@1.0.0",
+      "root@1.0.0",
+      "shared@1.0.0",
+    ]);
+    // shared is reached through two different hints ('^1.0.0' and '*'), so
+    // two visits run, but the packument itself is fetched exactly once.
+    assert.equal(calls.filter((n) => n === "shared").length, 1);
+  });
+
+  it("keeps siblings when one fetch fails", async (t) => {
+    const fixtures = {
+      root: packument("root", { "1.0.0": { good: "^1.0.0", bad: "^1.0.0" } }),
+      good: packument("good", { "1.0.0": {} }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    assert.ok(result.tree["good@1.0.0"]);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /Failed to fetch bad/);
+  });
+
+  it("dedups identical warnings", async (t) => {
+    const fixtures = {
+      root: packument("root", {
+        "1.0.0": { m1: "npm:missing@^1.0.0", m2: "npm:missing@^2.0.0" },
+      }),
+    };
+    const calls = stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    assert.equal(result.warnings.length, 1);
+    // Both hints share one packument fetch.
+    assert.equal(calls.filter((n) => n === "missing").length, 1);
+  });
+
+  it("warns when no published version satisfies a range", async (t) => {
+    const fixtures = {
+      root: packument("root", { "1.0.0": { gone: "^9.0.0" } }),
+      gone: packument("gone", { "1.0.0": {} }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    assert.match(result.warnings.join("\n"), /gone satisfies '\^9\.0\.0'/);
+    assert.equal(result.tree["gone@9.0.0"], undefined);
+  });
+
+  it("truncates when the package budget is exhausted", async (t) => {
+    const fixtures = {
+      root: packument("root", { "1.0.0": { a: "^1.0.0", b: "^1.0.0" } }),
+      a: packument("a", { "1.0.0": {} }),
+      b: packument("b", { "1.0.0": {} }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 3, {
+      maxPackages: 2,
+      timeLimitMs: 60_000,
+    });
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncatedBy, "packages");
+    assert.ok(Object.keys(result.tree).length <= 2);
+  });
+
+  it("truncates when the time budget is already spent", async (t) => {
+    stubRegistry(t, {});
+    const result = await resolveProductionTree("root", "1.0.0", 3, {
+      maxPackages: 100,
+      timeLimitMs: -1,
+    });
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncatedBy, "time");
+  });
+});
+
+describe("formatTree", () => {
+  it("renders the resolved tree, truncation note, and warnings", () => {
+    const result: ResolveResult = {
+      rootKey: "root@1.0.0",
+      tree: {
+        "root@1.0.0": {
+          version: "1.0.0",
+          dependencies: { a: "^1.0.0", gone: "^9.0.0" },
+        },
+        "a@1.0.0": { version: "1.0.0", dependencies: { a: "*" } },
+      },
+      hintToKey: new Map([
+        ["a@^1.0.0", "a@1.0.0"],
+        ["a@*", "a@1.0.0"],
+      ]),
+      warnings: ["No published version of gone satisfies '^9.0.0'."],
+      truncated: true,
+      truncatedBy: "packages",
+    };
+    const text = formatTree(result, 2).join("\n");
+    assert.match(text, /\*\*Resolved tree:\*\* 2 unique packages/);
+    assert.match(text, /tree is partial — package fetch limit reached/);
+    assert.match(text, /├── a@1\.0\.0/);
+    assert.match(text, /└── gone@\^9\.0\.0 \(truncated\)/);
+    assert.match(text, /\(already shown\)/); // cycle a→a
+    assert.match(text, /### Warnings \(1\)/);
   });
 });
