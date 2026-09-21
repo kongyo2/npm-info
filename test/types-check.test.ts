@@ -4,12 +4,30 @@ import { inspectExportsForTypes, detectTypesEntry } from "../src/tools/types-che
 import type { NpmPackageVersion } from "../src/types.js";
 
 describe("inspectExportsForTypes", () => {
-  it("finds nothing in string exports", () => {
+  it("finds nothing in string exports that are not declarations", () => {
     assert.deepEqual(inspectExportsForTypes("./index.js"), {
       found: false,
       subpathCount: 0,
       misorderedSubpaths: [],
     });
+  });
+
+  it("detects a string exports field pointing at a declaration file", () => {
+    assert.deepEqual(inspectExportsForTypes("./index.d.ts"), {
+      found: true,
+      rootEntry: "./index.d.ts",
+      subpathCount: 1,
+      misorderedSubpaths: [],
+    });
+    assert.equal(inspectExportsForTypes("./index.d.mts").found, true);
+    assert.equal(inspectExportsForTypes("./index.d.cts").found, true);
+  });
+
+  it("detects a subpath whose target is a declaration file", () => {
+    const result = inspectExportsForTypes({ ".": "./index.d.ts" });
+    assert.equal(result.found, true);
+    assert.equal(result.rootEntry, "./index.d.ts");
+    assert.equal(result.subpathCount, 1);
   });
 
   it("finds nothing when exports is missing", () => {
@@ -195,6 +213,31 @@ describe("detectTypesEntry", () => {
 
   it("ignores an empty typesVersions map", () => {
     const result = detectTypesEntry({ ...base, typesVersions: {} });
+    assert.equal(result.source, "none");
+  });
+
+  it("ignores non-string types and typings values", () => {
+    assert.equal(
+      detectTypesEntry({
+        ...base,
+        types: { "*": "./t.d.ts" } as unknown as string,
+      }).source,
+      "none"
+    );
+    assert.equal(
+      detectTypesEntry({
+        ...base,
+        typings: ["./t.d.ts"] as unknown as string,
+      }).source,
+      "none"
+    );
+  });
+
+  it("ignores a non-object typesVersions value", () => {
+    const result = detectTypesEntry({
+      ...base,
+      typesVersions: ">=4.0" as unknown as NpmPackageVersion["typesVersions"],
+    });
     assert.equal(result.source, "none");
   });
 

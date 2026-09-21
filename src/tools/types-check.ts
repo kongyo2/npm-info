@@ -54,16 +54,33 @@ function firstTarget(value: PackageExports | null | undefined): string | undefin
   return undefined;
 }
 
+const TYPES_FILE_PATTERN = /\.d\.[cm]?ts$/;
+
 export function inspectExportsForTypes(
   exports: PackageExports | null | undefined
 ): ExportsTypesFinding {
-  if (!exports || typeof exports === "string") {
+  if (!exports) {
     return { found: false, subpathCount: 0, misorderedSubpaths: [] };
+  }
+  if (typeof exports === "string") {
+    return TYPES_FILE_PATTERN.test(exports)
+      ? {
+          found: true,
+          rootEntry: exports,
+          subpathCount: 1,
+          misorderedSubpaths: [],
+        }
+      : { found: false, subpathCount: 0, misorderedSubpaths: [] };
   }
 
   const visitConditions = (
     node: PackageExports | null | undefined
   ): { entry?: string; condition?: string; misordered: boolean } => {
+    if (typeof node === "string") {
+      return TYPES_FILE_PATTERN.test(node)
+        ? { entry: node, misordered: false }
+        : { misordered: false };
+    }
     if (!node || typeof node !== "object") return { misordered: false };
     if (Array.isArray(node)) {
       let misordered = false;
@@ -146,7 +163,7 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
   exportsSubpathCount: number;
   misorderedSubpaths: string[];
 } {
-  if (versionData.types) {
+  if (typeof versionData.types === "string" && versionData.types) {
     return {
       entry: versionData.types,
       source: "types",
@@ -154,7 +171,7 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
       misorderedSubpaths: [],
     };
   }
-  if (versionData.typings) {
+  if (typeof versionData.typings === "string" && versionData.typings) {
     return {
       entry: versionData.typings,
       source: "typings",
@@ -172,7 +189,13 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
       misorderedSubpaths: fromExports.misorderedSubpaths,
     };
   }
-  if (versionData.typesVersions && Object.keys(versionData.typesVersions).length > 0) {
+  const typesVersions = versionData.typesVersions;
+  if (
+    typesVersions &&
+    typeof typesVersions === "object" &&
+    !Array.isArray(typesVersions) &&
+    Object.keys(typesVersions).length > 0
+  ) {
     return {
       source: "typesVersions",
       exportsSubpathCount: 0,
@@ -232,6 +255,8 @@ Examples:
         const hasBundledTypes = detection.source !== "none";
         const hasTypesVersions =
           !!versionData.typesVersions &&
+          typeof versionData.typesVersions === "object" &&
+          !Array.isArray(versionData.typesVersions) &&
           Object.keys(versionData.typesVersions).length > 0;
 
         let dtResult: Awaited<ReturnType<typeof checkDefinitelyTyped>> = {
