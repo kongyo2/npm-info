@@ -87,7 +87,7 @@ export function resolveDependencySpec(
   }
 
   if (
-    /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|catalog:|jsr:|portal:|patch:|github:)/i.test(
+    /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|catalog:|jsr:|portal:|patch:|github:|gitlab:|bitbucket:|gist:)/i.test(
       trimmed
     ) ||
     /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed)

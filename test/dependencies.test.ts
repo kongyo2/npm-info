@@ -73,6 +73,13 @@ describe("resolveDependencySpec", () => {
     assert.equal(resolveDependencySpec("foo", "portal:../local"), null);
     assert.equal(resolveDependencySpec("foo", "patch:foo@1.0.0#./fix.patch"), null);
   });
+
+  it("rejects gitlab:, bitbucket: and gist: shorthand", () => {
+    assert.equal(resolveDependencySpec("foo", "gitlab:user/repo"), null);
+    assert.equal(resolveDependencySpec("foo", "gitlab:user/repo#dev"), null);
+    assert.equal(resolveDependencySpec("foo", "bitbucket:user/repo"), null);
+    assert.equal(resolveDependencySpec("foo", "gist:11081aaa2815d66ee"), null);
+  });
 });
 
 describe("formatDeps", () => {
