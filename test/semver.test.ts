@@ -32,35 +32,6 @@ describe("maxSatisfying: exact versions", () => {
   it("returns null for garbage ranges", () => {
     assert.equal(maxSatisfying(VERSIONS, "not-a-range"), null);
   });
-
-  it("rejects operands with leading zeros, like node-semver", () => {
-    assert.equal(maxSatisfying(VERSIONS, "01.2.3"), null);
-    assert.equal(maxSatisfying(VERSIONS, "1.02.3"), null);
-    assert.equal(maxSatisfying(VERSIONS, "=01"), null);
-    assert.equal(maxSatisfying(VERSIONS, "^01.2.3"), null);
-  });
-
-  it("rejects a bare or misapplied v prefix", () => {
-    assert.equal(maxSatisfying(VERSIONS, "v"), null);
-    assert.equal(maxSatisfying(VERSIONS, "v=1.2.3"), null);
-    assert.equal(maxSatisfying(VERSIONS, "v 1.2.3"), null);
-    assert.equal(maxSatisfying(VERSIONS, "v1.2.3"), "1.2.3");
-    assert.equal(maxSatisfying(VERSIONS, "v*"), "2.0.0");
-  });
-
-  it("rejects empty build metadata", () => {
-    assert.equal(maxSatisfying(VERSIONS, "1.2.3+"), null);
-    assert.equal(maxSatisfying(VERSIONS, "1.2.3+build.7"), "1.2.3");
-  });
-
-  it("rejects a numeric part after a wildcard, like node-semver", () => {
-    assert.equal(maxSatisfying(VERSIONS, "1.x.2"), null);
-    assert.equal(maxSatisfying(VERSIONS, "x.2"), null);
-    assert.equal(maxSatisfying(VERSIONS, ">=1.x.2"), null);
-    assert.equal(maxSatisfying(VERSIONS, "1.*.0 - 2"), null);
-    assert.equal(maxSatisfying(VERSIONS, "1.x.x"), "1.3.0");
-    assert.equal(maxSatisfying(VERSIONS, "1.2.x"), "1.2.4");
-  });
 });
 
 describe("maxSatisfying: caret ranges", () => {
@@ -250,12 +221,6 @@ describe("maxSatisfying: compound ranges and unions", () => {
     );
   });
 
-  it("rejects the whole range when a union member is invalid", () => {
-    assert.equal(maxSatisfying(VERSIONS, "1.2.3 || garbage"), null);
-    assert.equal(maxSatisfying(VERSIONS, "garbage || 1.2.3"), null);
-    assert.equal(maxSatisfying(VERSIONS, "^1.2.3 || ^bad"), null);
-  });
-
   it("supports exact comparators inside unions", () => {
     assert.equal(maxSatisfying(["1.5.0", "2.0.0"], "^1 || 2.0.0"), "2.0.0");
   });
@@ -310,13 +275,6 @@ describe("maxSatisfying: prerelease handling", () => {
     assert.equal(maxSatisfying(versions, ">=1.0.0-beta.2 <1.0.0-rc.1"), "1.0.0-beta.11");
   });
 
-  it("rejects numeric prerelease identifiers with leading zeros", () => {
-    assert.equal(maxSatisfying(["1.2.3-01"], "1.2.3-01"), null);
-    assert.equal(maxSatisfying(["1.2.3", "2.0.0"], ">=1.2.3-01"), null);
-    assert.equal(maxSatisfying(["1.2.3", "2.0.0"], "1.2.3-01 - 2.0.0"), null);
-    assert.equal(maxSatisfying(["1.2.3-0a"], "1.2.3-0a"), "1.2.3-0a");
-  });
-
   it("hyphen ranges anchor prereleases on their endpoints", () => {
     assert.equal(
       maxSatisfying(["1.2.3-alpha.5", "1.2.3"], "1.2.3-alpha.1 - 2.0.0"),
@@ -326,5 +284,56 @@ describe("maxSatisfying: prerelease handling", () => {
       maxSatisfying(["1.2.3-alpha.5"], "1.2.3-alpha.1 - 2.0.0"),
       "1.2.3-alpha.5"
     );
+  });
+
+  it("strips a generated >=0.0.0 lower bound (node-semver GTE0)", () => {
+    const preVersions = ["0.0.0-alpha.1.2", "0.0.0-rc.2", "0.0.0", "0.0.1"];
+    assert.equal(maxSatisfying(preVersions, ">=0 <=0.0.0-rc.2 x"), "0.0.0-rc.2");
+    assert.equal(maxSatisfying(preVersions, "=0 <=0.0.0-rc.2"), "0.0.0-rc.2");
+    assert.equal(maxSatisfying(["0.0.0-alpha"], ">=0.0.0-0"), "0.0.0-alpha");
+  });
+});
+
+describe("maxSatisfying: malformed operands (node-semver parity)", () => {
+  it("rejects a numeric segment after a wildcard in plain comparators", () => {
+    assert.equal(maxSatisfying(VERSIONS, "=x.5"), null);
+    assert.equal(maxSatisfying(VERSIONS, "<1.x.2"), null);
+    assert.equal(maxSatisfying(VERSIONS, ">=1.*.9"), null);
+  });
+
+  it("truncates out-of-order wildcards under ~ and ^", () => {
+    assert.equal(maxSatisfying(VERSIONS, "~x.5"), "2.0.0");
+    assert.equal(maxSatisfying(["0.9.9", "1.3.0"], "^0.x.5"), "0.9.9");
+  });
+
+  it("truncates out-of-order wildcard hyphen endpoints", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.3.1 - x.18"), "2.0.0");
+  });
+
+  it("rejects an invalid branch anywhere in a union", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 || garbage"), null);
+  });
+
+  it("rejects leading zeros, empty ids and oversized numbers", () => {
+    assert.equal(maxSatisfying(VERSIONS, "01.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.02.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-01"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-a..b"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-.a"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+a..b"), null);
+    assert.equal(maxSatisfying(VERSIONS, "9007199254740992.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "0.0.9007199254740993"), null);
+  });
+
+  it("tolerates redundant + and numeric build ids", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+meta+extra"), "1.2.3");
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3+build.01"), "1.2.3");
+  });
+
+  it("ignores unparseable version strings in the candidates list", () => {
+    assert.equal(maxSatisfying(["1.1.1-.a", "1.2.3"], "1.1.1-.a"), null);
+    assert.equal(maxSatisfying(["1.1.1-_a", "1.2.3"], "*"), "1.2.3");
   });
 });

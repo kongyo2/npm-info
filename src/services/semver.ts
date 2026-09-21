@@ -5,38 +5,45 @@ export interface SemVer {
   prerelease: Array<string | number>;
 }
 
-const NUMERIC = /^(?:0|[1-9]\d*)$/;
+const CORE_SEGMENT = "(?:0|[1-9]\\d*)";
 
-export function parseSemver(v: string): SemVer | null {
-  const m = v.match(
-    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
-  );
-  if (!m || !NUMERIC.test(m[1]) || !NUMERIC.test(m[2]) || !NUMERIC.test(m[3])) {
-    return null;
-  }
-  const prerelease = parsePrerelease(m[4]);
-  if (!prerelease) return null;
-  return {
-    major: Number(m[1]),
-    minor: Number(m[2]),
-    patch: Number(m[3]),
-    prerelease,
-  };
+const PRERELEASE_ID = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const PRERELEASE = `(${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)`;
+
+const BUILD_GROUP = /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/;
+
+function stripBuild(v: string): string | null {
+  const plusIdx = v.indexOf("+");
+  if (plusIdx === -1) return v;
+  const firstGroup = v.slice(plusIdx + 1).split("+")[0];
+  return BUILD_GROUP.test(firstGroup) ? v.slice(0, plusIdx) : null;
 }
 
-function parsePrerelease(raw: string | undefined): Array<string | number> | null {
-  if (!raw) return [];
-  const out: Array<string | number> = [];
-  for (const p of raw.split(".")) {
-    if (!/^[0-9A-Za-z-]+$/.test(p)) return null;
-    if (/^\d+$/.test(p)) {
-      if (p.length > 1 && p[0] === "0") return null;
-      out.push(Number(p));
-    } else {
-      out.push(p);
-    }
+export function parseSemver(v: string): SemVer | null {
+  const stripped = stripBuild(v);
+  if (stripped === null) return null;
+  const m = stripped.match(
+    new RegExp(
+      `^(${CORE_SEGMENT})\\.(${CORE_SEGMENT})\\.(${CORE_SEGMENT})(?:-${PRERELEASE})?$`
+    )
+  );
+  if (!m) return null;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  const patch = Number(m[3]);
+  if (
+    major > Number.MAX_SAFE_INTEGER ||
+    minor > Number.MAX_SAFE_INTEGER ||
+    patch > Number.MAX_SAFE_INTEGER
+  ) {
+    return null;
   }
-  return out;
+  return { major, minor, patch, prerelease: parsePrerelease(m[4]) };
+}
+
+function parsePrerelease(raw: string | undefined): Array<string | number> {
+  if (!raw) return [];
+  return raw.split(".").map((p) => (/^\d+$/.test(p) ? Number(p) : p));
 }
 
 function makeSemver(major: number, minor: number, patch: number): SemVer {
@@ -46,6 +53,7 @@ function makeSemver(major: number, minor: number, patch: number): SemVer {
 interface PartialSemver {
   semver: SemVer;
   parts: 0 | 1 | 2 | 3;
+  invalidOrder: boolean;
 }
 
 const WILDCARD = /^[xX*]$/;
@@ -55,44 +63,49 @@ function isWildcard(segment: string | undefined): boolean {
 }
 
 function parsePartial(v: string): PartialSemver | null {
-  const stripped = v.replace(/^v(?=[0-9xX*])/, "");
-  const plusAt = stripped.indexOf("+");
-  const operand = plusAt === -1 ? stripped : stripped.slice(0, plusAt);
+  const stripped = stripBuild(v.replace(/^v/, ""));
+  if (stripped === null) return null;
+  const m = stripped.match(
+    new RegExp(
+      `^((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:-${PRERELEASE})?)?)?$`
+    )
+  );
+  if (!m) return null;
+
+  let parts = 0;
+  let wildcardSeen = false;
+  let invalidOrder = false;
+  for (const seg of [m[1], m[2], m[3]]) {
+    if (seg === undefined) break;
+    if (isWildcard(seg)) {
+      wildcardSeen = true;
+    } else if (wildcardSeen) {
+      invalidOrder = true;
+    } else {
+      parts++;
+    }
+  }
+  const partCount = parts as 0 | 1 | 2 | 3;
+  const major = partCount >= 1 ? Number(m[1]) : 0;
+  const minor = partCount >= 2 ? Number(m[2]) : 0;
+  const patch = partCount >= 3 ? Number(m[3]) : 0;
   if (
-    plusAt !== -1 &&
-    !/^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/.test(stripped.slice(plusAt + 1))
+    major > Number.MAX_SAFE_INTEGER ||
+    minor > Number.MAX_SAFE_INTEGER ||
+    patch > Number.MAX_SAFE_INTEGER
   ) {
     return null;
   }
-  const m = operand.match(
-    /^(\d+|[xX*])(?:\.(\d+|[xX*])(?:\.(\d+|[xX*])(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?)?)?$/
-  );
-  if (!m) return null;
-  let seenWildcard = false;
-  for (const part of [m[1], m[2], m[3]]) {
-    if (part === undefined || isWildcard(part)) {
-      seenWildcard = true;
-    } else if (seenWildcard || !NUMERIC.test(part)) {
-      return null;
-    }
-  }
-  const prerelease = parsePrerelease(m[4]);
-  if (prerelease === null) return null;
-
-  let parts: 0 | 1 | 2 | 3;
-  if (isWildcard(m[1])) parts = 0;
-  else if (m[2] === undefined || isWildcard(m[2])) parts = 1;
-  else if (m[3] === undefined || isWildcard(m[3])) parts = 2;
-  else parts = 3;
 
   return {
     semver: {
-      major: parts >= 1 ? Number(m[1]) : 0,
-      minor: parts >= 2 ? Number(m[2]) : 0,
-      patch: parts >= 3 ? Number(m[3]) : 0,
-      prerelease: parts === 3 ? prerelease : [],
+      major,
+      minor,
+      patch,
+      prerelease: partCount === 3 ? parsePrerelease(m[4]) : [],
     },
-    parts,
+    parts: partCount,
+    invalidOrder,
   };
 }
 
@@ -145,6 +158,10 @@ function rangeNothing(): SemverRange {
   };
 }
 
+function exclusiveFloor(v: SemVer): SemVer {
+  return { ...v, prerelease: [0] };
+}
+
 function isRangeAll(range: SemverRange): boolean {
   return range.min === null && range.max === null;
 }
@@ -164,6 +181,8 @@ function parseSingleConstraint(r: string): SemverRange | null {
   if (!p) return null;
   const { semver: base, parts } = p;
 
+  if (p.invalidOrder && op !== "~" && op !== "^") return null;
+
   if (parts === 0) {
     return op === ">" || op === "<" ? rangeNothing() : rangeAll();
   }
@@ -178,12 +197,22 @@ function parseSingleConstraint(r: string): SemverRange | null {
       } else {
         max = makeSemver(0, 0, base.patch + 1);
       }
-      return { min: base, minInclusive: true, max, maxInclusive: false };
+      return {
+        min: base,
+        minInclusive: true,
+        max: exclusiveFloor(max),
+        maxInclusive: false,
+      };
     }
 
     case "~": {
       const max = partialUpperBound(base, parts === 1 ? 1 : 2);
-      return { min: base, minInclusive: true, max, maxInclusive: false };
+      return {
+        min: base,
+        minInclusive: true,
+        max: exclusiveFloor(max),
+        maxInclusive: false,
+      };
     }
 
     case ">=":
@@ -201,18 +230,23 @@ function parseSingleConstraint(r: string): SemverRange | null {
       if (parts === 3) {
         return { min: null, minInclusive: true, max: base, maxInclusive: true };
       }
-      const max = partialUpperBound(base, parts);
+      const max = exclusiveFloor(partialUpperBound(base, parts));
       return { min: null, minInclusive: true, max, maxInclusive: false };
     }
 
     case "<":
-      return { min: null, minInclusive: true, max: base, maxInclusive: false };
+      return {
+        min: null,
+        minInclusive: true,
+        max: parts === 3 ? base : exclusiveFloor(base),
+        maxInclusive: false,
+      };
 
     default: {
       if (parts === 3) {
         return { min: base, minInclusive: true, max: base, maxInclusive: true };
       }
-      const max = partialUpperBound(base, parts);
+      const max = exclusiveFloor(partialUpperBound(base, parts));
       return { min: base, minInclusive: true, max, maxInclusive: false };
     }
   }
@@ -223,19 +257,24 @@ function expandHyphenRanges(range: string): string | null {
   const expanded = range.replace(
     /(\S+)\s+-\s+(\S+)/g,
     (_, loRaw: string, hiRaw: string) => {
-      const lo = parsePartial(loRaw);
-      const hi = parsePartial(hiRaw);
+      const lo = parsePartial(loRaw.replace(/^[v=]/, ""));
+      const hi = parsePartial(hiRaw.replace(/^[v=]/, ""));
       if (!lo || !hi) {
         invalid = true;
         return "";
       }
-      const min = lo.parts === 0 ? "" : `>=${loRaw.replace(/^v(?=[0-9xX*])/, "")}`;
+      let min = "";
+      if (lo.parts === 3) {
+        min = `>=${loRaw}`;
+      } else if (lo.parts !== 0) {
+        min = `>=${lo.semver.major}.${lo.semver.minor}.${lo.semver.patch}`;
+      }
       let max = "";
       if (hi.parts === 3) {
-        max = `<=${hiRaw.replace(/^v(?=[0-9xX*])/, "")}`;
+        max = `<=${hiRaw}`;
       } else if (hi.parts !== 0) {
-        const bound = partialUpperBound(hi.semver, hi.parts);
-        max = `<${bound.major}.${bound.minor}.${bound.patch}`;
+        const bound = exclusiveFloor(partialUpperBound(hi.semver, hi.parts));
+        max = `<${bound.major}.${bound.minor}.${bound.patch}-0`;
       }
       return `${min} ${max}`.trim();
     }
@@ -260,6 +299,16 @@ function parseRange(r: string): SemverRange | null {
   for (const part of normalized.split(/\s+/)) {
     const constraint = parseSingleConstraint(part);
     if (!constraint) return null;
+    if (
+      constraint.min &&
+      constraint.minInclusive &&
+      constraint.min.major === 0 &&
+      constraint.min.minor === 0 &&
+      constraint.min.patch === 0 &&
+      constraint.min.prerelease.length === 0
+    ) {
+      constraint.min = null;
+    }
     if (constraint.min) {
       const cmp = min ? cmpSemver(constraint.min, min) : 1;
       if (!min || cmp > 0) {
@@ -283,24 +332,26 @@ function parseRange(r: string): SemverRange | null {
 }
 
 export function maxSatisfying(versions: string[], range: string): string | null {
-  const r = range.trim().replace(/^v(?=[0-9xX*])/, "");
-  if (versions.includes(r) && parseSemver(r)) return r;
+  const r = range.trim().replace(/^v(?=\d)/, "");
+  if (versions.includes(r) && parseSemver(r) !== null) return r;
 
-  let subRanges = r
-    .split("||")
-    .map((s) => ({ sub: s.trim(), parsed: parseRange(s.trim()) }));
+  const subRanges: Array<{ sub: string; parsed: SemverRange }> = [];
+  for (const rawSub of r.split("||")) {
+    const sub = rawSub.trim();
+    const parsed = parseRange(sub);
+    if (!parsed) return null;
+    subRanges.push({ sub, parsed });
+  }
 
-  if (subRanges.some(({ parsed }) => parsed === null)) return null;
-
-  if (subRanges.some(({ parsed }) => parsed !== null && isRangeAll(parsed))) {
-    subRanges = [{ sub: "*", parsed: rangeAll() }];
+  if (subRanges.some(({ parsed }) => isRangeAll(parsed))) {
+    subRanges.length = 0;
+    subRanges.push({ sub: "*", parsed: rangeAll() });
   }
 
   let best: string | null = null;
   let bestParsed: SemVer | null = null;
 
   for (const { sub, parsed } of subRanges) {
-    if (!parsed) continue;
     const prereleaseAnchors: Array<[number, number, number]> = [];
     for (const m of sub.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
       prereleaseAnchors.push([Number(m[1]), Number(m[2]), Number(m[3])]);
