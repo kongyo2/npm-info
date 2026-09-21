@@ -1,26 +1,71 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageMetadata } from "../services/npm-api.js";
-import type { NpmPackageVersion, NpmRegistryResponse } from "../types.js";
+import { extractGitHubRepo, fetchPackageMetadata } from "../services/npm-api.js";
+import { detectTypesEntry } from "./types-check.js";
+import type { LicenseRef, NpmPackageVersion, NpmRegistryResponse } from "../types.js";
 import { errorResult, textResult } from "./shared.js";
 
 const PackageInfoInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name (e.g., 'react', '@types/node', 'lodash')"),
 };
 
-function formatRepository(repo: NpmRegistryResponse["repository"]): string | undefined {
-  if (!repo) return undefined;
-  if (typeof repo === "string") return repo;
-  if (typeof repo.url === "string") {
-    return repo.url.replace(/^git\+/, "").replace(/\.git$/, "");
-  }
-  return undefined;
+/**
+ * Normalize a license field: modern manifests use an SPDX string, but old
+ * packages (e.g. q@0.9.7, markdown@0.5.0) publish `{ type, url }` objects or
+ * a `licenses` array of them. Without this they would print `[object Object]`.
+ */
+function formatLicenseRef(l: LicenseRef): string | undefined {
+  const name = l.type ?? l.name;
+  if (!name) return l.url;
+  return l.url ? `${name} (${l.url})` : name;
 }
 
-function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
+export function formatLicense(
+  license: string | LicenseRef | LicenseRef[] | undefined,
+  licenses?: LicenseRef[]
+): string | undefined {
+  if (typeof license === "string") return license;
+  const list = Array.isArray(license) ? license : license ? [license] : (licenses ?? []);
+  const names = list
+    .map((l) => (l && typeof l === "object" ? formatLicenseRef(l) : undefined))
+    .filter((s): s is string => !!s);
+  return names.length > 0 ? names.join(", ") : undefined;
+}
+
+/**
+ * Normalize a repository field to a browsable URL where possible:
+ * `git+ssh://git@github.com:o/r.git` → `https://github.com/o/r`, and a
+ * monorepo `directory` becomes a `tree/HEAD/<dir>` link.
+ */
+export function formatRepository(
+  repo: NpmRegistryResponse["repository"]
+): string | undefined {
+  if (!repo) return undefined;
+  const url = typeof repo === "string" ? repo : repo.url;
+  if (!url || typeof url !== "string") return undefined;
+
+  const github = extractGitHubRepo(repo);
+  if (github) {
+    const base = `https://github.com/${github.owner}/${github.repo}`;
+    return github.directory ? `${base}/tree/HEAD/${github.directory}` : base;
+  }
+
+  // Non-GitHub hosts: strip the transport wrappers so the link is clickable.
+  return url
+    .replace(/^git\+/, "")
+    .replace(/^git@([^:]+):/, "https://$1/")
+    .replace(/^(?:git|ssh):\/\/(?:git@)?/, "https://")
+    .replace(/^http:\/\//, "https://")
+    .replace(/#.*$/, "")
+    .replace(/\.git\/?$/, "")
+    .replace(/\/$/, "");
+}
+
+export function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
   if (!author) return undefined;
   if (typeof author === "string") return author;
   const parts: string[] = [];
@@ -28,6 +73,32 @@ function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
   if (author.email) parts.push(`<${author.email}>`);
   if (author.url) parts.push(`(${author.url})`);
   return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+/** `engines` is normally a map, but old manifests ship strings or arrays. */
+export function formatEngines(engines: NpmPackageVersion["engines"]): string | undefined {
+  if (!engines) return undefined;
+  if (typeof engines === "string") return engines;
+  if (Array.isArray(engines)) {
+    return engines.length > 0 ? engines.join(", ") : undefined;
+  }
+  if (typeof engines !== "object") return undefined;
+  const parts = Object.entries(engines).map(([k, v]) => `${k}: ${v}`);
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+/** `keywords` is normally a list; old manifests ship a comma string. */
+export function formatKeywords(
+  keywords: string[] | string | undefined
+): string | undefined {
+  if (typeof keywords === "string") return keywords || undefined;
+  if (!Array.isArray(keywords) || keywords.length === 0) return undefined;
+  return keywords.join(", ");
+}
+
+export function formatMaintainer(m: { name?: string; email?: string } | string): string {
+  if (typeof m === "string") return m;
+  return `${m.name ?? "unknown"}${m.email ? ` <${m.email}>` : ""}`;
 }
 
 export function registerPackageInfoTool(server: McpServer): void {
@@ -74,7 +145,13 @@ Examples:
         lines.push("");
 
         if (latestTag) lines.push(`**Latest Version:** ${latestTag}`);
-        if (metadata.license) lines.push(`**License:** ${metadata.license}`);
+
+        const license = formatLicense(
+          latestVersion?.license ?? metadata.license,
+          latestVersion?.licenses ?? metadata.licenses
+        );
+        if (license) lines.push(`**License:** ${license}`);
+
         if (metadata.homepage) lines.push(`**Homepage:** ${metadata.homepage}`);
 
         const repoUrl = formatRepository(metadata.repository);
@@ -83,16 +160,11 @@ Examples:
         const authorStr = formatAuthor(latestVersion?.author);
         if (authorStr) lines.push(`**Author:** ${authorStr}`);
 
-        if (latestVersion?.engines) {
-          const engineParts = Object.entries(latestVersion.engines).map(
-            ([k, v]) => `${k}: ${v}`
-          );
-          lines.push(`**Engines:** ${engineParts.join(", ")}`);
-        }
+        const engines = formatEngines(latestVersion?.engines);
+        if (engines) lines.push(`**Engines:** ${engines}`);
 
-        if (metadata.keywords?.length) {
-          lines.push(`**Keywords:** ${metadata.keywords.join(", ")}`);
-        }
+        const keywords = formatKeywords(metadata.keywords);
+        if (keywords) lines.push(`**Keywords:** ${keywords}`);
 
         if (metadata["dist-tags"]) {
           const tags = Object.entries(metadata["dist-tags"])
@@ -114,7 +186,7 @@ Examples:
           lines.push("");
           lines.push("**Maintainers:**");
           for (const m of metadata.maintainers.slice(0, 10)) {
-            lines.push(`- ${m.name}${m.email ? ` <${m.email}>` : ""}`);
+            lines.push(`- ${formatMaintainer(m)}`);
           }
           if (metadata.maintainers.length > 10) {
             lines.push(`- ... and ${metadata.maintainers.length - 10} more`);
@@ -129,10 +201,17 @@ Examples:
             `**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`
           );
 
-          if (latestVersion.types || latestVersion.typings) {
-            lines.push(
-              `**TypeScript:** Bundled types (${latestVersion.types ?? latestVersion.typings})`
-            );
+          // Share the same bundled-types detection as npm_package_types so
+          // the two tools never disagree (e.g. exports-map-only types).
+          const detection = detectTypesEntry(latestVersion);
+          if (detection.source !== "none") {
+            const sourceLabel =
+              detection.source === "types" || detection.source === "typings"
+                ? (detection.entry ?? `${detection.source} field`)
+                : detection.source === "exports"
+                  ? (detection.entry ?? "exports map")
+                  : "typesVersions map";
+            lines.push(`**TypeScript:** Bundled types (${sourceLabel})`);
           }
 
           if (latestVersion.deprecated) {
