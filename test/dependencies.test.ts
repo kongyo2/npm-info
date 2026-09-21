@@ -203,6 +203,17 @@ describe("resolveProductionTree", () => {
     assert.doesNotMatch(text, /weird|nil/);
   });
 
+  it("marks deps whose packument fetch failed as not resolved", async (t) => {
+    const fixtures = {
+      root: packument("root", { "1.0.0": { bad: "^1.0.0" } }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    assert.equal(result.tree["bad@^1.0.0"], undefined);
+    const text = formatTree(result, 2).join("\n");
+    assert.match(text, /bad@\^1\.0\.0 \(not resolved\)/);
+  });
+
   it("dedups identical warnings", async (t) => {
     const fixtures = {
       root: packument("root", {

@@ -174,10 +174,6 @@ export async function resolveProductionTree(
       pkg = await getPackument(name);
     } catch (err) {
       warn(`Failed to fetch ${name}: ${errorMessage(err)}`);
-      if (!tree[hintKey]) {
-        tree[hintKey] = { version: versionHint, dependencies: {} };
-      }
-      hintToKey.set(hintKey, hintKey);
       if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
       return;
     }
