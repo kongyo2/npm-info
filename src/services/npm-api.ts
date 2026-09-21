@@ -301,7 +301,8 @@ export function extractGitHubRepo(
     shorthandMatch ??
     url.match(
       /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
-    );
+    ) ??
+    url.match(/^([\w.-]+)\/([\w.-]+)$/);
   if (!match) return null;
 
   const result: { owner: string; repo: string; directory?: string } = {

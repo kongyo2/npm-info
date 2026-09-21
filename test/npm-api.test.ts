@@ -103,8 +103,20 @@ describe("extractGitHubRepo", () => {
     );
   });
 
+  it("parses bare owner/repo shorthand as GitHub", () => {
+    assert.deepEqual(extractGitHubRepo("bower/bower"), {
+      owner: "bower",
+      repo: "bower",
+    });
+    assert.deepEqual(extractGitHubRepo({ type: "git", url: "node-formidable/formidable" }), {
+      owner: "node-formidable",
+      repo: "formidable",
+    });
+  });
+
   it("returns null for non-GitHub hosts", () => {
     assert.equal(extractGitHubRepo("https://gitlab.com/x/y"), null);
+    assert.equal(extractGitHubRepo("https://gitlab.com/x/y.git"), null);
   });
 
   it("returns null when repository is missing or has no url", () => {
