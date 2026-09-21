@@ -11,6 +11,10 @@ const PRERELEASE_ID = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const PRERELEASE = `(${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)`;
 
 const BUILD_GROUP = /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/;
+const BUILD_METADATA = /\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*/g;
+
+const MAX_VERSION_LENGTH = 256;
+const MAX_ID_LENGTH = 250;
 
 function stripBuild(v: string): string | null {
   const plusIdx = v.indexOf("+");
@@ -19,7 +23,9 @@ function stripBuild(v: string): string | null {
 }
 
 export function parseSemver(v: string): SemVer | null {
-  const stripped = stripBuild(v);
+  const trimmed = v.trim();
+  if (trimmed.length > MAX_VERSION_LENGTH) return null;
+  const stripped = stripBuild(trimmed.replace(/^v/, ""));
   if (stripped === null) return null;
   const m = stripped.match(
     new RegExp(
@@ -69,6 +75,9 @@ function parsePartial(v: string): PartialSemver | null {
     )
   );
   if (!m) return null;
+  if (m[4] && m[4].split(".").some((id) => id.length > MAX_ID_LENGTH)) {
+    return null;
+  }
 
   let parts = 0;
   let wildcardSeen = false;
@@ -250,44 +259,51 @@ function parseSingleConstraint(r: string): SemverRange | null {
   }
 }
 
+const XRANGE_PART = `(?:${CORE_SEGMENT}|[xX*])`;
+const HYPHEN_OPERAND =
+  `[v=\\s]*${XRANGE_PART}` +
+  `(?:\\.${XRANGE_PART}(?:\\.${XRANGE_PART}` +
+  `(?:-${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)?` +
+  `(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?` +
+  `)?)?`;
+const HYPHEN_RANGE = new RegExp(
+  `^\\s*(${HYPHEN_OPERAND})\\s+-\\s+(${HYPHEN_OPERAND})\\s*$`
+);
+
 function expandHyphenRanges(range: string): string | null {
-  let invalid = false;
-  const expanded = range.replace(
-    /(\S+)\s+-\s+(\S+)/g,
-    (_, loRaw: string, hiRaw: string) => {
-      const lo = parsePartial(loRaw.replace(/^[v=]/, ""));
-      const hi = parsePartial(hiRaw.replace(/^[v=]/, ""));
-      if (!lo || !hi) {
-        invalid = true;
-        return "";
-      }
-      let min = "";
-      if (lo.parts === 3) {
-        min = `>=${loRaw}`;
-      } else if (lo.parts !== 0) {
-        min = `>=${lo.semver.major}.${lo.semver.minor}.${lo.semver.patch}`;
-      }
-      let max = "";
-      if (hi.parts === 3) {
-        max = `<=${hiRaw}`;
-      } else if (hi.parts !== 0) {
-        const bound = exclusiveFloor(partialUpperBound(hi.semver, hi.parts));
-        max = `<${bound.major}.${bound.minor}.${bound.patch}-0`;
-      }
-      return `${min} ${max}`.trim();
-    }
-  );
-  return invalid ? null : expanded;
+  const m = range.match(HYPHEN_RANGE);
+  if (!m) return range;
+  const loRaw = m[1].replace(/^[v=\s]+/, "");
+  const hiRaw = m[2].replace(/^[v=\s]+/, "");
+  const lo = parsePartial(loRaw);
+  const hi = parsePartial(hiRaw);
+  if (!lo || !hi) return null;
+  let min = "";
+  if (lo.parts === 3) {
+    min = `>=${loRaw}`;
+  } else if (lo.parts !== 0) {
+    min = `>=${lo.semver.major}.${lo.semver.minor}.${lo.semver.patch}`;
+  }
+  let max = "";
+  if (hi.parts === 3) {
+    max = `<=${hiRaw}`;
+  } else if (hi.parts !== 0) {
+    const bound = exclusiveFloor(partialUpperBound(hi.semver, hi.parts));
+    max = `<${bound.major}.${bound.minor}.${bound.patch}-0`;
+  }
+  return `${min} ${max}`.trim();
 }
 
 function parseRange(r: string): SemverRange | null {
   const trimmed = r.trim();
   if (trimmed === "") return rangeAll();
 
-  const hyphenExpanded = expandHyphenRanges(trimmed);
+  const hyphenExpanded = expandHyphenRanges(trimmed.replace(BUILD_METADATA, ""));
   if (hyphenExpanded === null) return null;
 
-  const normalized = hyphenExpanded.replace(/(>=|<=|>|<|=|\^|~>?)\s+/g, "$1").trim();
+  const normalized = hyphenExpanded
+    .replace(/(>=|<=|>|<|=|\^|~>?)\s+(?!=\s)/g, "$1")
+    .trim();
   if (normalized === "") return rangeAll();
 
   let min: SemVer | null = null;
@@ -299,6 +315,7 @@ function parseRange(r: string): SemverRange | null {
     if (!constraint) return null;
     if (
       constraint.min &&
+      constraint.min !== constraint.max &&
       constraint.minInclusive &&
       constraint.min.major === 0 &&
       constraint.min.minor === 0 &&
@@ -331,7 +348,6 @@ function parseRange(r: string): SemverRange | null {
 
 export function maxSatisfying(versions: string[], range: string): string | null {
   const r = range.trim().replace(/^v(?=\d)/, "");
-  if (versions.includes(r) && parseSemver(r) !== null) return r;
 
   const subRanges: Array<{ sub: string; parsed: SemverRange }> = [];
   for (const rawSub of r.split("||")) {

@@ -347,3 +347,63 @@ describe("maxSatisfying: malformed operands (node-semver parity)", () => {
     assert.equal(maxSatisfying(["1.1.1-_a", "1.2.3"], "*"), "1.2.3");
   });
 });
+
+describe("maxSatisfying: stray hyphens and operand prefixes", () => {
+  it("rejects a hyphen expression embedded in a compound range", () => {
+    assert.equal(maxSatisfying(VERSIONS, ">=1.0.0 1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - 2.0.0 <9.0.0"), null);
+    assert.equal(maxSatisfying(["1.5.0", "2.0.0"], "x - 2.0.0 1.5.0"), null);
+  });
+
+  it("accepts v/whitespace-prefixed endpoints like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v 2.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "v 1.2 - 2.0.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v=2.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "v 1.2.3 - 2.0.0"), "2.0.0");
+  });
+});
+
+describe("maxSatisfying: operator spacing", () => {
+  it("does not merge an operator with a spaced-out '='", () => {
+    assert.equal(maxSatisfying(VERSIONS, "> = 1.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "> = 1.2"), null);
+    assert.equal(maxSatisfying(VERSIONS, "> =1.2.3"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "> =1.2"), "2.0.0");
+  });
+});
+
+describe("maxSatisfying: exact 0.0.0 equality bound", () => {
+  it("does not strip the lower bound of an exact 0.0.0 constraint", () => {
+    const preVersions = ["0.0.0-alpha.1.2", "0.0.0-rc.2", "0.0.0", "0.0.1"];
+    assert.equal(maxSatisfying(preVersions, "=0.0.0 <=0.0.0-rc.2"), null);
+    assert.equal(maxSatisfying(preVersions, "0.0.0 <=0.0.0-rc.2"), null);
+    assert.equal(maxSatisfying(preVersions, ">=0 <=0.0.0-rc.2"), "0.0.0-rc.2");
+  });
+});
+
+describe("maxSatisfying: oversized identifiers", () => {
+  it("rejects prerelease identifiers over 250 chars like node-semver", () => {
+    const big = "b".repeat(251);
+    assert.equal(maxSatisfying(VERSIONS, `>=1.0.0-${big}`), null);
+    assert.equal(maxSatisfying(VERSIONS, `1.2.3 - 2.0.0-${big}`), null);
+    assert.equal(maxSatisfying(VERSIONS, `~1.0.0-${big}`), null);
+    assert.equal(maxSatisfying(VERSIONS, `>=1.0.0-${"b".repeat(250)}`), "2.0.0");
+  });
+});
+
+describe("maxSatisfying: candidate version normalization", () => {
+  it("parses v-prefixed and whitespace-padded candidates", () => {
+    assert.equal(maxSatisfying(["v9.9.9", "1.2.3"], ">1.0.0"), "v9.9.9");
+    assert.equal(maxSatisfying(["1.2.3 ", "1.0.0"], "1.2.3"), "1.2.3 ");
+    assert.equal(maxSatisfying(["\t2.0.0"], "*"), "\t2.0.0");
+  });
+
+  it("rejects candidate strings over 256 characters", () => {
+    const huge = `1.2.3-${"a".repeat(300)}`;
+    assert.equal(maxSatisfying([huge, "1.2.3"], "*"), "1.2.3");
+  });
+
+  it("picks the first equal candidate when the range carries build metadata", () => {
+    assert.equal(maxSatisfying(["1.2.3 ", "1.2.3+ok"], "1.2.3+ok"), "1.2.3 ");
+  });
+});
