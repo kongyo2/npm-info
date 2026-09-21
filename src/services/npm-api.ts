@@ -301,7 +301,7 @@ export function extractGitHubRepo(
   const match =
     shorthandMatch ??
     url.match(
-      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
+      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/[^/?#\s]+(\/[^?#\s]*)?)?\/?(?:[#?].*)?$/
     ) ??
     url.match(/^([\w.-]+)\/([\w.-]+)$/);
   if (!match) return null;
@@ -310,9 +310,13 @@ export function extractGitHubRepo(
     owner: match[1],
     repo: match[2],
   };
-  const directory = repoObj?.directory ?? repoObj?.path;
+  const directory = repoObj?.directory ?? repoObj?.path ?? match[3]?.slice(1);
   if (typeof directory === "string" && directory) {
-    result.directory = directory;
+    const cleaned = directory
+      .split("/")
+      .filter((seg) => seg !== "" && seg !== "." && seg !== "..")
+      .join("/");
+    if (cleaned) result.directory = cleaned;
   }
   return result;
 }

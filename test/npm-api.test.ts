@@ -128,6 +128,54 @@ describe("extractGitHubRepo", () => {
     );
   });
 
+  it("extracts the subdirectory from a /tree/ URL", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/babel/babel/tree/master/packages/babel-core",
+      }),
+      { owner: "babel", repo: "babel", directory: "packages/babel-core" }
+    );
+    assert.deepEqual(extractGitHubRepo("https://github.com/babel/babel/tree/master"), {
+      owner: "babel",
+      repo: "babel",
+    });
+  });
+
+  it("prefers the explicit directory field over a /tree/ URL path", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/babel/babel/tree/master/packages/babel-core",
+        directory: "packages/babel-preset",
+      }),
+      { owner: "babel", repo: "babel", directory: "packages/babel-preset" }
+    );
+  });
+
+  it("normalizes empty, dot and dot-dot directory segments", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/a/b.git",
+        directory: "/pkgs/./core//",
+      }),
+      { owner: "a", repo: "b", directory: "pkgs/core" }
+    );
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/a/b.git",
+        directory: "..",
+      }),
+      { owner: "a", repo: "b" }
+    );
+  });
+
+  it("still rejects /blob/ URLs", () => {
+    assert.equal(extractGitHubRepo("https://github.com/o/r/blob/master/README.md"), null);
+  });
+
   it("returns null for non-GitHub hosts", () => {
     assert.equal(extractGitHubRepo("https://gitlab.com/x/y"), null);
     assert.equal(extractGitHubRepo("https://gitlab.com/x/y.git"), null);
