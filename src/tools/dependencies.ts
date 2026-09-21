@@ -56,7 +56,6 @@ export function formatDeps(
   return lines;
 }
 
-/** Registry manifests sometimes carry non-object dependency maps. */
 function depsRecord(value: unknown): Record<string, string> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, string>)
@@ -68,22 +67,6 @@ interface TreeNode {
   dependencies: Record<string, string>;
 }
 
-/**
- * Translate a package.json dependency entry into the (real package name,
- * version hint) pair we should fetch from the registry.
- *
- * Standard entry: `"foo": "^1.0.0"` → `{ name: "foo", hint: "^1.0.0" }`.
- *
- * npm alias spec: `"foo": "npm:bar@^1.0.0"` (foo installed from package bar)
- * → `{ name: "bar", hint: "^1.0.0" }`. Scoped aliases work too:
- * `"foo": "npm:@scope/bar@1.0.0"` → `{ name: "@scope/bar", hint: "1.0.0" }`.
- *
- * Non-registry specs (git, file:, link:, http(s):, github: shorthand) can't
- * be resolved through the npm registry — return null so the caller can
- * record a clear warning instead of attempting a doomed packument fetch.
- *
- * Exported for tests.
- */
 export function resolveDependencySpec(
   alias: string,
   raw: string
@@ -100,12 +83,11 @@ export function resolveDependencySpec(
     return { name: spec, hint: "latest" };
   }
 
-  // Specs that can't be resolved against the registry.
   if (
     /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|catalog:|jsr:|portal:|patch:|github:)/i.test(
       trimmed
     ) ||
-    /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed) // bare GitHub shorthand "owner/repo"
+    /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed)
   ) {
     return null;
   }
@@ -116,38 +98,22 @@ export function resolveDependencySpec(
 export interface ResolveResult {
   rootKey: string;
   tree: Record<string, TreeNode>;
-  /** Maps "name@versionHint" (the range as written in package.json) to the
-   *  resolved tree key "name@resolvedVersion". Used to walk child edges
-   *  without re-running semver resolution. */
   hintToKey: Map<string, string>;
   warnings: string[];
-  /** True when a budget cap stopped expansion — the tree is partial. */
   truncated: boolean;
-  /** Why the tree was truncated ("packages" | "time"), when truncated. */
   truncatedBy?: "packages" | "time";
 }
 
 export interface TreeBudget {
-  /** Max distinct packuments to fetch. */
   maxPackages: number;
-  /** Wall-clock budget for the whole resolution. */
   timeLimitMs: number;
 }
 
-/** Default bounds keep deep trees inside typical MCP client timeouts. */
 export const DEFAULT_TREE_BUDGET: TreeBudget = {
   maxPackages: 400,
   timeLimitMs: 20_000,
 };
 
-/**
- * Resolve a production-dependency tree by fetching abbreviated packuments
- * with bounded concurrency. Each package is fetched at most once (the
- * in-flight promise is cached by name) and each `name@versionHint` pair is
- * queued at most once. Final deduplication is keyed on the resolved
- * version, so multiple ranges that resolve to the same version produce a
- * single tree node.
- */
 export async function resolveProductionTree(
   rootName: string,
   rootHint: string,
@@ -156,11 +122,6 @@ export async function resolveProductionTree(
 ): Promise<ResolveResult> {
   const runLimited = createLimiter(8);
   const packuments = new Map<string, Promise<AbbreviatedPackument>>();
-  // Tracks the shallowest depth at which each `name@versionHint` was visited.
-  // Skipping by hint alone (a Set) is racy under concurrent fetches: if the
-  // same hint is first processed on a deeper branch (no children expanded
-  // because we hit the depth limit) and later seen at a shallower depth, the
-  // shallower visit must run so its children get explored.
   const visitedAtDepth = new Map<string, number>();
   const tree: Record<string, TreeNode> = {};
   const hintToKey = new Map<string, string>();
@@ -198,7 +159,6 @@ export async function resolveProductionTree(
     if (prevDepth !== undefined && prevDepth <= currentDepth) return;
     visitedAtDepth.set(hintKey, currentDepth);
 
-    // Budget check only applies to new fetches — cached packuments are free.
     if (!packuments.has(name)) {
       if (truncatedBy) return;
       if (packuments.size >= budget.maxPackages) truncatedBy = "packages";
@@ -226,9 +186,6 @@ export async function resolveProductionTree(
     } else if (pkg["dist-tags"]?.[versionHint]) {
       resolvedVersion = pkg["dist-tags"][versionHint];
     } else {
-      // No fallback to dist-tags.latest: if no published version satisfies
-      // the range, npm would refuse to install it. Surface that as a
-      // warning rather than silently expanding an unrelated version's deps.
       resolvedVersion = maxSatisfying(Object.keys(versions), versionHint);
     }
 
@@ -452,8 +409,6 @@ Examples:
             lines.push(...sections);
           }
         } else {
-          // Transitive resolution: only production deps (matches npm install
-          // semantics — devDeps/peerDeps are not transitively resolved).
           lines.push(...formatDeps(runtimeDeps, "Direct Dependencies"));
           const tree = await resolveProductionTree(
             package_name,

@@ -7,12 +7,10 @@ export type PackageExports =
 export interface AbbreviatedPackument {
   name: string;
   modified?: string;
-  // Unpublished or partially-tombstoned packages can lack either field.
   "dist-tags"?: Record<string, string>;
   versions?: Record<string, NpmPackageVersion>;
 }
 
-/** Legacy license shapes: `{ type, url }` objects and `licenses` arrays. */
 export interface LicenseRef {
   type?: string;
   name?: string;
@@ -24,7 +22,6 @@ export interface NpmPackageVersion {
   version: string;
   description?: string;
   license?: string | LicenseRef | LicenseRef[];
-  /** Deprecated plural form found on old manifests. */
   licenses?: LicenseRef[];
   homepage?: string;
   repository?: { type?: string; url?: string; directory?: string } | string;

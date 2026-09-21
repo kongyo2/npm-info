@@ -110,7 +110,6 @@ function packument(
   };
 }
 
-/** Stub the registry so every abbreviated-packument lookup hits `fixtures`. */
 function stubRegistry(
   t: TestContext,
   fixtures: Record<string, AbbreviatedPackument>,
@@ -149,8 +148,6 @@ describe("resolveProductionTree", () => {
       "root@1.0.0",
       "shared@1.0.0",
     ]);
-    // shared is reached through two different hints ('^1.0.0' and '*'), so
-    // two visits run, but the packument itself is fetched exactly once.
     assert.equal(calls.filter((n) => n === "shared").length, 1);
   });
 
@@ -175,7 +172,6 @@ describe("resolveProductionTree", () => {
     const calls = stubRegistry(t, fixtures);
     const result = await resolveProductionTree("root", "1.0.0", 2);
     assert.equal(result.warnings.length, 1);
-    // Both hints share one packument fetch.
     assert.equal(calls.filter((n) => n === "missing").length, 1);
   });
 
@@ -241,7 +237,7 @@ describe("formatTree", () => {
     assert.match(text, /tree is partial — package fetch limit reached/);
     assert.match(text, /├── a@1\.0\.0/);
     assert.match(text, /└── gone@\^9\.0\.0 \(truncated\)/);
-    assert.match(text, /\(already shown\)/); // cycle a→a
+    assert.match(text, /\(already shown\)/);
     assert.match(text, /### Warnings \(1\)/);
   });
 });

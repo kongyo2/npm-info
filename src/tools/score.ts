@@ -36,36 +36,26 @@ function windowDays(from: string, to: string): number | null {
   return Math.round((end - start) / MS_PER_DAY);
 }
 
-/**
- * Whole days since an ISO timestamp — used to flag npms.io analyses that are
- * too old to trust (npms.io's public index stopped updating in early 2023).
- */
 export function daysSince(iso: string, now: number = Date.now()): number | null {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return null;
   return Math.floor((now - ms) / MS_PER_DAY);
 }
 
-/** Data staleness threshold for the npms.io score. */
 export const STALE_AFTER_DAYS = 180;
 
 export interface ScoreReportInput {
   packageName: string;
-  /** npms.io analysis, or null when npms has none / failed. */
   npms: NpmsPackageResponse | null;
-  /** Human-readable npms.io failure (non-404), when it happened. */
   npmsError?: string;
-  /** Registry facts used to frame the no-score fallback report. */
   registryMeta?: { latest?: string; modified?: string };
   downloads: {
     lastWeek?: NpmDownloadsResponse;
     lastMonth?: NpmDownloadsResponse;
   };
-  /** Injectable clock for tests. */
   now?: number;
 }
 
-/** Pure renderer for npm_package_score output — exported for tests. */
 export function formatScoreReport(input: ScoreReportInput): string[] {
   const { packageName, npms, npmsError, registryMeta, downloads, now } = input;
   const lines: string[] = [`# ${packageName} - Package Score`, ""];
@@ -264,10 +254,6 @@ Examples:
         const is404 = npmsRes.error instanceof HttpError && npmsRes.error.status === 404;
         let registryMeta: { latest?: string; modified?: string } | undefined;
         if (is404) {
-          // npms.io 404 today usually means "index frozen before this package
-          // existed" — confirm the package itself exists before reporting it.
-          // The abbreviated packument is enough (and far smaller than the
-          // full document for packages with many versions).
           const packument = await fetchAbbreviatedPackument(package_name).catch(
             () => undefined
           );

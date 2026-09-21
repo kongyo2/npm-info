@@ -21,17 +21,10 @@ const TypesCheckInputSchema = {
 };
 
 interface ExportsTypesFinding {
-  /** Whether any "types" condition was found in the exports map */
   found: boolean;
-  /** First detected types entry path (the "." or root subpath when possible) */
   rootEntry?: string;
-  /** Condition key that produced `rootEntry`: `types`, or a TS-version gated
-   * `types@<spec>` key — gated entries only apply to matching TS versions. */
   rootCondition?: string;
-  /** Number of subpath patterns where a "types" condition was detected */
   subpathCount: number;
-  /** Subpaths where a `types`/`types@*` key is not listed first —
-   * TypeScript resolves conditions in order and may ignore such entries. */
   misorderedSubpaths: string[];
 }
 
@@ -39,10 +32,6 @@ function isTypesConditionKey(key: string): boolean {
   return key === "types" || key.startsWith("types@");
 }
 
-/**
- * Resolve an exports target to a concrete path: strings pass through and
- * fallback arrays yield their first string alternative.
- */
 function pickTargetString(value: PackageExports | null | undefined): string | undefined {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
@@ -53,12 +42,6 @@ function pickTargetString(value: PackageExports | null | undefined): string | un
   return undefined;
 }
 
-/**
- * Walk the package.json `exports` field and detect TypeScript "types"
- * conditions. Modern packages declare types via conditional exports rather
- * than the legacy `types`/`typings` fields, so we surface that explicitly.
- * Exported for tests.
- */
 export function inspectExportsForTypes(
   exports: PackageExports | null | undefined
 ): ExportsTypesFinding {
@@ -79,14 +62,9 @@ export function inspectExportsForTypes(
       }
       return { misordered };
     }
-    // A `types` condition must be listed first in its condition object —
-    // TypeScript resolves conditions in order and stops at the first match,
-    // so a `types` key after `import`/`default` is silently ignored.
     const keys = Object.keys(node);
     const firstTypesIdx = keys.findIndex(isTypesConditionKey);
     let misordered = firstTypesIdx > 0;
-    // Prefer the unconditional `"types"` entry; fall back to the first
-    // versioned `types@<spec>` condition (TypeScript 5.5+ gated typing).
     const direct = pickTargetString(node["types"]);
     if (direct) return { entry: direct, condition: "types", misordered };
     for (const [key, value] of Object.entries(node)) {
@@ -105,7 +83,6 @@ export function inspectExportsForTypes(
     return { misordered };
   };
 
-  // Sugar form: `"exports": { "import": "...", "types": "..." }` (no subpaths)
   const hasSubpaths = !Array.isArray(exports)
     ? Object.keys(exports).some((k) => k.startsWith("."))
     : false;
@@ -152,8 +129,6 @@ export function inspectExportsForTypes(
 
 export function detectTypesEntry(versionData: NpmPackageVersion): {
   entry?: string;
-  /** For `exports`-sourced entries, the condition key that declared it —
-   * a `types@<spec>` key means the entry is gated to those TS versions. */
   entryCondition?: string;
   source: "types" | "typings" | "exports" | "typesVersions" | "none";
   exportsSubpathCount: number;
@@ -185,8 +160,6 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
       misorderedSubpaths: fromExports.misorderedSubpaths,
     };
   }
-  // typesVersions maps TypeScript versions to bundled .d.ts paths — its
-  // presence alone means the package ships type definitions.
   if (versionData.typesVersions && Object.keys(versionData.typesVersions).length > 0) {
     return {
       source: "typesVersions",
@@ -249,8 +222,6 @@ Examples:
           !!versionData.typesVersions &&
           Object.keys(versionData.typesVersions).length > 0;
 
-        // A transient DefinitelyTyped lookup failure should not discard the
-        // bundled-types detection we already have — degrade to a notice.
         let dtResult: Awaited<ReturnType<typeof checkDefinitelyTyped>> = {
           exists: false,
         };
@@ -271,8 +242,6 @@ Examples:
         if (hasBundledTypes) {
           lines.push(`**Bundled Types:** Yes`);
           if (detection.entry) {
-            // A gated `types@<spec>` entry only applies to matching TS
-            // versions; say so rather than presenting it as the entry.
             const gate =
               detection.entryCondition && detection.entryCondition !== "types"
                 ? ` (only for TypeScript matching \`${detection.entryCondition}\`)`
@@ -311,8 +280,6 @@ Examples:
           const typesName = typesPackageName(package_name);
           lines.push(`**Bundled Types:** No`);
           if (dtResult.deprecated) {
-            // Deprecated @types stubs mean the library ships its own types
-            // (that our detection can't see) — installing the stub is wrong.
             lines.push(
               `**DefinitelyTyped:** ${typesName}@${dtResult.version} exists but is a deprecated stub`
             );

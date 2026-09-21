@@ -24,16 +24,11 @@ const VersionsInputSchema = {
 
 export interface VersionRow {
   version: string;
-  /** ISO publish date — absent when the packument has no `time` entry. */
   date?: string;
   tags: string[];
   deprecated?: string;
 }
 
-/**
- * Build the version listing: every published version, sorted newest first by
- * `time` (versions missing a timestamp sort last). Exported for tests.
- */
 export function collectVersionRows(
   metadata: NpmRegistryResponse,
   limit: number

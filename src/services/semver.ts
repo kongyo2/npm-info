@@ -1,28 +1,16 @@
-/**
- * Lightweight semver range resolution used to walk dependency trees without
- * pulling in the full `semver` package. Supports the range syntax that
- * actually appears in published package.json files: `^`, `~` (and the `~>`
- * alias), comparators (`>=`, `>`, `<=`, `<`, `=`) with optional whitespace
- * and `v` prefixes, x-ranges (`1`, `1.x`, `1.2.*`, `x`), hyphen ranges with
- * abbreviated endpoints, space-separated intersections, and `||` unions.
- */
-
 export interface SemVer {
   major: number;
   minor: number;
   patch: number;
-  /** Empty when the version is not a prerelease. */
   prerelease: Array<string | number>;
 }
 
-/** A semver numeric part without leading zeros (`0` itself is allowed). */
 const NUMERIC = /^(?:0|[1-9]\d*)$/;
 
 export function parseSemver(v: string): SemVer | null {
   const m = v.match(
     /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
   );
-  // node-semver rejects numeric identifiers with leading zeros.
   if (!m || !NUMERIC.test(m[1]) || !NUMERIC.test(m[2]) || !NUMERIC.test(m[3])) {
     return null;
   }
@@ -42,7 +30,6 @@ function parsePrerelease(raw: string | undefined): Array<string | number> | null
   for (const p of raw.split(".")) {
     if (!/^[0-9A-Za-z-]+$/.test(p)) return null;
     if (/^\d+$/.test(p)) {
-      // Numeric identifiers must not have leading zeros (`0` is fine).
       if (p.length > 1 && p[0] === "0") return null;
       out.push(Number(p));
     } else {
@@ -58,10 +45,6 @@ function makeSemver(major: number, minor: number, patch: number): SemVer {
 
 interface PartialSemver {
   semver: SemVer;
-  /**
-   * Number of explicit numeric parts: 1 = "1", 2 = "1.2", 3 = "1.2.3".
-   * 0 means the whole operand is a wildcard ("x", "X", "*").
-   */
   parts: 0 | 1 | 2 | 3;
 }
 
@@ -71,18 +54,8 @@ function isWildcard(segment: string | undefined): boolean {
   return segment !== undefined && WILDCARD.test(segment);
 }
 
-/**
- * Parse a possibly-abbreviated version operand (e.g. `1`, `1.2`, `1.2.3`,
- * `1.2.3-pre`, `v1.2`, `1.x`). Missing or wildcard parts default to zero.
- * Returns the parsed semver along with the explicit-part count so callers
- * can apply node-semver's partial-version expansion rules per operator.
- */
 function parsePartial(v: string): PartialSemver | null {
-  // Strip an optional leading `v` (only before a real operand — `v=` or a
-  // bare `v` is invalid, matching node-semver).
   const stripped = v.replace(/^v(?=[0-9xX*])/, "");
-  // Build metadata after `+` is ignored for range matching but must be
-  // well-formed when present (`1.2.3+` is invalid in node-semver).
   const plusAt = stripped.indexOf("+");
   const operand = plusAt === -1 ? stripped : stripped.slice(0, plusAt);
   if (
@@ -95,10 +68,6 @@ function parsePartial(v: string): PartialSemver | null {
     /^(\d+|[xX*])(?:\.(\d+|[xX*])(?:\.(\d+|[xX*])(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?)?)?$/
   );
   if (!m) return null;
-  // Reject leading zeros in numeric parts and in numeric prerelease ids,
-  // like node-semver does (`01.2.3`, `=01`, `1.2.3-01` are all invalid).
-  // A wildcard may not be followed by a numeric part either: `1.x.2` and
-  // `x.2` are invalid in node-semver rather than shorthand for `1.x` / `x`.
   let seenWildcard = false;
   for (const part of [m[1], m[2], m[3]]) {
     if (part === undefined || isWildcard(part)) {
@@ -121,20 +90,12 @@ function parsePartial(v: string): PartialSemver | null {
       major: parts >= 1 ? Number(m[1]) : 0,
       minor: parts >= 2 ? Number(m[2]) : 0,
       patch: parts >= 3 ? Number(m[3]) : 0,
-      // A prerelease is only meaningful on a fully-specified version.
       prerelease: parts === 3 ? prerelease : [],
     },
     parts,
   };
 }
 
-/**
- * Compare two semver values. Implements the prerelease-precedence rules from
- * semver.org §11: numeric identifiers compare numerically; alphanumeric ones
- * compare lexically; numeric < alphanumeric; a shorter prefix-equal prerelease
- * is lower; and a non-prerelease version is greater than a prerelease at the
- * same major.minor.patch.
- */
 export function cmpSemver(a: SemVer, b: SemVer): number {
   if (a.major !== b.major) return a.major < b.major ? -1 : 1;
   if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
@@ -166,10 +127,8 @@ export function cmpSemver(a: SemVer, b: SemVer): number {
 
 interface SemverRange {
   min: SemVer | null;
-  /** True when min is `>=`, false when `>`. Ignored if min is null. */
   minInclusive: boolean;
   max: SemVer | null;
-  /** True when max is `<=`, false when `<`. Ignored if max is null. */
   maxInclusive: boolean;
 }
 
@@ -177,7 +136,6 @@ function rangeAll(): SemverRange {
   return { min: null, minInclusive: true, max: null, maxInclusive: false };
 }
 
-/** `<0.0.0-0` — the node-semver encoding of "matches nothing". */
 function rangeNothing(): SemverRange {
   return {
     min: null,
@@ -191,7 +149,6 @@ function isRangeAll(range: SemverRange): boolean {
   return range.min === null && range.max === null;
 }
 
-/** Upper bound of the abbreviated window `base` covers (exclusive). */
 function partialUpperBound(base: SemVer, parts: 1 | 2): SemVer {
   return parts === 1
     ? makeSemver(base.major + 1, 0, 0)
@@ -207,17 +164,11 @@ function parseSingleConstraint(r: string): SemverRange | null {
   if (!p) return null;
   const { semver: base, parts } = p;
 
-  // A wildcard operand ("x", "*") matches everything for `>=`, `<=`, `^`,
-  // `~`, `=`, and bare form — but `>x` / `<x` match nothing (node-semver
-  // normalizes them to `<0.0.0-0`).
   if (parts === 0) {
     return op === ">" || op === "<" ? rangeNothing() : rangeAll();
   }
 
   switch (op) {
-    // Caret: `^X.Y.Z` keeps left-most non-zero stable. Abbreviated forms
-    // expand per node-semver: `^1` ≡ `>=1.0.0 <2.0.0`, `^1.2` ≡ `>=1.2.0
-    // <2.0.0`, `^0.1` ≡ `>=0.1.0 <0.2.0`, `^0` ≡ `>=0.0.0 <1.0.0`.
     case "^": {
       let max: SemVer;
       if (base.major > 0 || parts === 1) {
@@ -230,21 +181,14 @@ function parseSingleConstraint(r: string): SemverRange | null {
       return { min: base, minInclusive: true, max, maxInclusive: false };
     }
 
-    // Tilde: `~X.Y.Z` allows patch updates within X.Y. Abbreviated:
-    // `~1` ≡ `>=1.0.0 <2.0.0`, `~1.2` ≡ `>=1.2.0 <1.3.0`.
     case "~": {
       const max = partialUpperBound(base, parts === 1 ? 1 : 2);
       return { min: base, minInclusive: true, max, maxInclusive: false };
     }
 
-    // `>=X` keeps the partial as the lower bound (missing parts default to
-    // 0, which is the lowest in the range — the desired behavior here).
     case ">=":
       return { min: base, minInclusive: true, max: null, maxInclusive: false };
 
-    // `>X.Y.Z` is exclusive on the original tuple (preserves prerelease
-    // ordering). Abbreviated: `>1` expands to "above all 1.x.x" ≡ `>=2.0.0`,
-    // `>1.2` expands to `>=1.3.0` (top of the abbreviated range, exclusive).
     case ">": {
       if (parts === 3) {
         return { min: base, minInclusive: false, max: null, maxInclusive: false };
@@ -253,9 +197,6 @@ function parseSingleConstraint(r: string): SemverRange | null {
       return { min, minInclusive: true, max: null, maxInclusive: false };
     }
 
-    // `<=X.Y.Z` is inclusive on the original tuple. Abbreviated `<=X` means
-    // "everything up to and including X.x.x" ≡ `<X+1.0.0`; `<=X.Y` ≡
-    // `<X.Y+1.0`.
     case "<=": {
       if (parts === 3) {
         return { min: null, minInclusive: true, max: base, maxInclusive: true };
@@ -264,15 +205,9 @@ function parseSingleConstraint(r: string): SemverRange | null {
       return { min: null, minInclusive: true, max, maxInclusive: false };
     }
 
-    // `<X` keeps the partial as the (exclusive) upper bound — missing parts
-    // default to 0, which gives `<1` ≡ `<1.0.0`, `<1.2` ≡ `<1.2.0`. Per
-    // node-semver this matches the lowest version in that abbreviated range.
     case "<":
       return { min: null, minInclusive: true, max: base, maxInclusive: false };
 
-    // `=X.Y.Z` (or a bare version / x-range) pins exactly that version or
-    // window: `1.2.3` matches only itself; `1.2` ≡ `>=1.2.0 <1.3.0`; `1` ≡
-    // `>=1.0.0 <2.0.0`.
     default: {
       if (parts === 3) {
         return { min: base, minInclusive: true, max: base, maxInclusive: true };
@@ -283,13 +218,6 @@ function parseSingleConstraint(r: string): SemverRange | null {
   }
 }
 
-/**
- * Rewrite hyphen ranges (`1.2.3 - 2.3.4`) into comparator pairs so the rest
- * of the parser only deals with space-separated constraints. Per node-semver:
- * `1.2.3 - 2.3.4` ≡ `>=1.2.3 <=2.3.4`, `1.2 - 2.3` ≡ `>=1.2.0 <2.4.0`,
- * `1 - 2` ≡ `>=1.0.0 <3.0.0`, `1.2.3 - 2` ≡ `>=1.2.3 <3.0.0`.
- * Returns null when a hyphen endpoint is not a valid version operand.
- */
 function expandHyphenRanges(range: string): string | null {
   let invalid = false;
   const expanded = range.replace(
@@ -322,13 +250,9 @@ function parseRange(r: string): SemverRange | null {
   const hyphenExpanded = expandHyphenRanges(trimmed);
   if (hyphenExpanded === null) return null;
 
-  // Collapse whitespace between an operator and its operand (`>= 1.2.3`,
-  // `~> 1.2` — both valid in node-semver) so tokens split cleanly.
   const normalized = hyphenExpanded.replace(/(>=|<=|>|<|=|\^|~>?)\s+/g, "$1").trim();
   if (normalized === "") return rangeAll();
 
-  // Intersect all space-separated constraints: highest min and lowest max
-  // win; on ties an exclusive bound beats an inclusive one.
   let min: SemVer | null = null;
   let minInclusive = true;
   let max: SemVer | null = null;
@@ -358,10 +282,6 @@ function parseRange(r: string): SemverRange | null {
   return { min, minInclusive, max, maxInclusive };
 }
 
-/**
- * Lightweight semver maxSatisfying — returns the highest version from
- * `versions` that satisfies `range`. Falls back to null if no match.
- */
 export function maxSatisfying(versions: string[], range: string): string | null {
   const r = range.trim().replace(/^v(?=[0-9xX*])/, "");
   if (versions.includes(r) && parseSemver(r)) return r;
@@ -370,12 +290,8 @@ export function maxSatisfying(versions: string[], range: string): string | null 
     .split("||")
     .map((s) => ({ sub: s.trim(), parsed: parseRange(s.trim()) }));
 
-  // node-semver rejects the whole range when any union member is invalid —
-  // it never silently ignores an unparseable branch.
   if (subRanges.some(({ parsed }) => parsed === null)) return null;
 
-  // node-semver collapses a union to `*` when any of its comparator sets is
-  // the ANY set — which also discards the other sets' prerelease anchors.
   if (subRanges.some(({ parsed }) => parsed !== null && isRangeAll(parsed))) {
     subRanges = [{ sub: "*", parsed: rangeAll() }];
   }
@@ -385,12 +301,6 @@ export function maxSatisfying(versions: string[], range: string): string | null 
 
   for (const { sub, parsed } of subRanges) {
     if (!parsed) continue;
-    // npm/node-semver only allows a prerelease version to satisfy a range
-    // when the range explicitly references a prerelease at the same
-    // major.minor.patch tuple. Capture every such tuple appearing in this
-    // sub-range; a prerelease version is eligible only if its tuple is in
-    // this set. Without this, e.g. `>1.2.3-alpha.3` would erroneously
-    // match `3.4.5-alpha.9`.
     const prereleaseAnchors: Array<[number, number, number]> = [];
     for (const m of sub.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
       prereleaseAnchors.push([Number(m[1]), Number(m[2]), Number(m[3])]);

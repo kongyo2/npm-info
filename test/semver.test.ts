@@ -44,7 +44,6 @@ describe("maxSatisfying: exact versions", () => {
     assert.equal(maxSatisfying(VERSIONS, "v"), null);
     assert.equal(maxSatisfying(VERSIONS, "v=1.2.3"), null);
     assert.equal(maxSatisfying(VERSIONS, "v 1.2.3"), null);
-    // `v` before a real operand is still valid.
     assert.equal(maxSatisfying(VERSIONS, "v1.2.3"), "1.2.3");
     assert.equal(maxSatisfying(VERSIONS, "v*"), "2.0.0");
   });
@@ -59,7 +58,6 @@ describe("maxSatisfying: exact versions", () => {
     assert.equal(maxSatisfying(VERSIONS, "x.2"), null);
     assert.equal(maxSatisfying(VERSIONS, ">=1.x.2"), null);
     assert.equal(maxSatisfying(VERSIONS, "1.*.0 - 2"), null);
-    // Wildcards in trailing positions remain valid.
     assert.equal(maxSatisfying(VERSIONS, "1.x.x"), "1.3.0");
     assert.equal(maxSatisfying(VERSIONS, "1.2.x"), "1.2.4");
   });
@@ -253,8 +251,6 @@ describe("maxSatisfying: compound ranges and unions", () => {
   });
 
   it("rejects the whole range when a union member is invalid", () => {
-    // node-semver considers a range invalid if any `||` branch is — it never
-    // silently ignores an unparseable branch.
     assert.equal(maxSatisfying(VERSIONS, "1.2.3 || garbage"), null);
     assert.equal(maxSatisfying(VERSIONS, "garbage || 1.2.3"), null);
     assert.equal(maxSatisfying(VERSIONS, "^1.2.3 || ^bad"), null);
@@ -265,8 +261,6 @@ describe("maxSatisfying: compound ranges and unions", () => {
   });
 
   it("collapses unions containing * to * (drops prerelease anchors)", () => {
-    // node-semver: any ANY set collapses the whole union to `*`, so the
-    // prerelease anchor from the other branch no longer applies.
     assert.equal(
       maxSatisfying(["2.0.0", "2.4.3-beta.2"], "^x || ^2.4.3-alpha.0"),
       "2.0.0"
@@ -320,7 +314,6 @@ describe("maxSatisfying: prerelease handling", () => {
     assert.equal(maxSatisfying(["1.2.3-01"], "1.2.3-01"), null);
     assert.equal(maxSatisfying(["1.2.3", "2.0.0"], ">=1.2.3-01"), null);
     assert.equal(maxSatisfying(["1.2.3", "2.0.0"], "1.2.3-01 - 2.0.0"), null);
-    // Alphanumeric identifiers may start with zero — still valid.
     assert.equal(maxSatisfying(["1.2.3-0a"], "1.2.3-0a"), "1.2.3-0a");
   });
 

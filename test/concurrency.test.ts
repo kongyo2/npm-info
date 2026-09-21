@@ -28,7 +28,6 @@ describe("createLimiter", () => {
       }),
       /sync boom/
     );
-    // The limiter must not be wedged: the next task runs immediately.
     const result = await runLimited(() => Promise.resolve("ok"));
     assert.equal(result, "ok");
   });

@@ -39,17 +39,12 @@ function encodePackageName(name: string): string {
     : encodeURIComponent(name);
 }
 
-/**
- * Map a package name to its DefinitelyTyped companion package name:
- * `react` → `@types/react`, `@babel/core` → `@types/babel__core`.
- */
 export function typesPackageName(packageName: string): string {
   return packageName.startsWith("@")
     ? `@types/${packageName.slice(1).replace("/", "__")}`
     : `@types/${packageName}`;
 }
 
-/** HTTP error carrying the response status, so callers can branch on it. */
 export class HttpError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -59,9 +54,7 @@ export class HttpError extends Error {
   }
 }
 
-/** Statuses worth one retry: rate limiting and transient gateway failures. */
 const RETRYABLE_STATUSES = new Set([429, 503]);
-/** Never wait longer than this for a Retry-After hint. */
 const MAX_RETRY_WAIT_MS = 10_000;
 
 async function fetchOnce(
@@ -91,12 +84,10 @@ async function fetchWithTimeout(
   timeout: number = DEFAULT_REQUEST_TIMEOUT,
   headers: Record<string, string> = { Accept: "application/json" }
 ): Promise<Response> {
-  // Registries and CDNs are friendlier to clients that identify themselves.
   const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
   const first = await fetchOnce(url, timeout, merged);
   if (!RETRYABLE_STATUSES.has(first.status)) return first;
 
-  // One retry, bounded by the server's Retry-After hint.
   const retryAfter = Number(first.headers.get("retry-after"));
   const waitMs =
     Number.isFinite(retryAfter) && retryAfter > 0
@@ -106,10 +97,6 @@ async function fetchWithTimeout(
   return fetchOnce(url, timeout, merged);
 }
 
-/**
- * Fetch a JSON endpoint, translating non-2xx responses into descriptive
- * errors via `describeFailure`.
- */
 async function fetchJson<T>(
   url: string,
   describeFailure: (status: number) => string,
@@ -170,12 +157,6 @@ export async function fetchPackageVersion(
   );
 }
 
-/**
- * Fetch the manifest for a requested version. The registry's `/<name>/<v>`
- * endpoint only resolves exact versions and dist-tags, so a semver range
- * like `^18` or `18.x` is resolved here by picking the maxSatisfying
- * published version from the abbreviated packument.
- */
 export async function fetchResolvedVersion(
   packageName: string,
   version?: string
@@ -223,8 +204,6 @@ export async function fetchNpmsScore(packageName: string): Promise<NpmsPackageRe
 export interface DefinitelyTypedResult {
   exists: boolean;
   version?: string;
-  /** Deprecation notice — @types packages for libs that now bundle their
-   * own types are published as deprecated stub definitions. */
   deprecated?: string;
 }
 
@@ -250,7 +229,6 @@ export async function checkDefinitelyTyped(
   );
 }
 
-/** Live download counts from the npm downloads API (api.npmjs.org). */
 export async function fetchNpmDownloads(
   packageName: string
 ): Promise<{ lastWeek?: NpmDownloadsResponse; lastMonth?: NpmDownloadsResponse }> {
@@ -277,7 +255,6 @@ export function extractGitHubRepo(
   const url = typeof repository === "string" ? repository : repository.url;
   if (!url) return null;
 
-  // Handle github:owner/repo shorthand notation
   const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
   const match =
     shorthandMatch ??

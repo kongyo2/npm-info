@@ -21,12 +21,6 @@ const SearchInputSchema = {
     .describe("Maximum number of results to return (default: 10, max: 30)"),
 };
 
-/**
- * Render search results to markdown lines. Exported for tests.
- * `final` is a relevance number that is no longer normalized to 0-1 by the
- * registry, so it is rendered raw; the detail metrics are documented as 0-1
- * fractions.
- */
 export function formatSearchResults(query: string, result: NpmSearchResult): string[] {
   if (result.total === 0 || result.objects.length === 0) {
     return [`No packages found matching "${query}". Try broader search terms.`];

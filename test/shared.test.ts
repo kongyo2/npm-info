@@ -49,11 +49,9 @@ describe("truncateSafely", () => {
   });
 
   it("never splits a surrogate pair", () => {
-    // "😀" is two UTF-16 code units; a limit of 3 would land mid-pair.
     const { text, truncated } = truncateSafely("ab😀cd", 3);
     assert.equal(truncated, true);
     assert.equal(text, "ab");
-    // Round-tripping through the code-point iterator must not produce U+FFFD.
     assert.ok(![...text].some((c) => c === "�"));
   });
 

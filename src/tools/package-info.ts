@@ -13,11 +13,6 @@ const PackageInfoInputSchema = {
     .describe("npm package name (e.g., 'react', '@types/node', 'lodash')"),
 };
 
-/**
- * Normalize a license field: modern manifests use an SPDX string, but old
- * packages (e.g. q@0.9.7, markdown@0.5.0) publish `{ type, url }` objects or
- * a `licenses` array of them. Without this they would print `[object Object]`.
- */
 function formatLicenseRef(l: LicenseRef): string | undefined {
   const name = l.type ?? l.name;
   if (!name) return l.url;
@@ -36,11 +31,6 @@ export function formatLicense(
   return names.length > 0 ? names.join(", ") : undefined;
 }
 
-/**
- * Normalize a repository field to a browsable URL where possible:
- * `git+ssh://git@github.com:o/r.git` → `https://github.com/o/r`, and a
- * monorepo `directory` becomes a `tree/HEAD/<dir>` link.
- */
 export function formatRepository(
   repo: NpmRegistryResponse["repository"]
 ): string | undefined {
@@ -54,7 +44,6 @@ export function formatRepository(
     return github.directory ? `${base}/tree/HEAD/${github.directory}` : base;
   }
 
-  // Non-GitHub hosts: strip the transport wrappers so the link is clickable.
   return url
     .replace(/^git\+/, "")
     .replace(/^git@([^:]+):/, "https://$1/")
@@ -75,7 +64,6 @@ export function formatAuthor(author: NpmPackageVersion["author"]): string | unde
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/** `engines` is normally a map, but old manifests ship strings or arrays. */
 export function formatEngines(engines: NpmPackageVersion["engines"]): string | undefined {
   if (!engines) return undefined;
   if (typeof engines === "string") return engines;
@@ -87,7 +75,6 @@ export function formatEngines(engines: NpmPackageVersion["engines"]): string | u
   return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
-/** `keywords` is normally a list; old manifests ship a comma string. */
 export function formatKeywords(
   keywords: string[] | string | undefined
 ): string | undefined {
@@ -201,8 +188,6 @@ Examples:
             `**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`
           );
 
-          // Share the same bundled-types detection as npm_package_types so
-          // the two tools never disagree (e.g. exports-map-only types).
           const detection = detectTypesEntry(latestVersion);
           if (detection.source !== "none") {
             const sourceLabel =
