@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  fetchPackageVersion,
+  fetchResolvedVersion,
   checkDefinitelyTyped,
   typesPackageName,
 } from "../services/npm-api.js";
@@ -11,9 +11,13 @@ import { errorMessage, errorResult, textResult } from "./shared.js";
 const TypesCheckInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
-  version: z.string().optional().describe("Specific version to check (default: latest)"),
+  version: z
+    .string()
+    .optional()
+    .describe("Version, dist-tag, or semver range to check (default: latest)"),
 };
 
 interface ExportsTypesFinding {
@@ -23,6 +27,13 @@ interface ExportsTypesFinding {
   rootEntry?: string;
   /** Number of subpath patterns where a "types" condition was detected */
   subpathCount: number;
+  /** Subpaths where a `types`/`types@*` key is not listed first —
+   * TypeScript resolves conditions in order and may ignore such entries. */
+  misorderedSubpaths: string[];
+}
+
+function isTypesConditionKey(key: string): boolean {
+  return key === "types" || key.startsWith("types@");
 }
 
 /**
@@ -49,37 +60,46 @@ export function inspectExportsForTypes(
   exports: PackageExports | null | undefined
 ): ExportsTypesFinding {
   if (!exports || typeof exports === "string") {
-    return { found: false, subpathCount: 0 };
+    return { found: false, subpathCount: 0, misorderedSubpaths: [] };
   }
 
   const visitConditions = (
     node: PackageExports | null | undefined
-  ): string | undefined => {
-    if (!node || typeof node !== "object") return undefined;
+  ): { entry?: string; misordered: boolean } => {
+    if (!node || typeof node !== "object") return { misordered: false };
     if (Array.isArray(node)) {
+      let misordered = false;
       for (const item of node) {
         const nested = visitConditions(item);
-        if (nested) return nested;
+        if (nested.misordered) misordered = true;
+        if (nested.entry) return { entry: nested.entry, misordered };
       }
-      return undefined;
+      return { misordered };
     }
+    // A `types` condition must be listed first in its condition object —
+    // TypeScript resolves conditions in order and stops at the first match,
+    // so a `types` key after `import`/`default` is silently ignored.
+    const keys = Object.keys(node);
+    const firstTypesIdx = keys.findIndex(isTypesConditionKey);
+    let misordered = firstTypesIdx > 0;
     // Prefer the unconditional `"types"` entry; fall back to the first
     // versioned `types@<spec>` condition (TypeScript 5.5+ gated typing).
     const direct = pickTargetString(node["types"]);
-    if (direct) return direct;
+    if (direct) return { entry: direct, misordered };
     for (const [key, value] of Object.entries(node)) {
       if (key.startsWith("types@")) {
         const gated = pickTargetString(value);
-        if (gated) return gated;
+        if (gated) return { entry: gated, misordered };
       }
     }
     for (const value of Object.values(node)) {
       if (value && typeof value === "object") {
         const nested = visitConditions(value);
-        if (nested) return nested;
+        if (nested.misordered) misordered = true;
+        if (nested.entry) return { entry: nested.entry, misordered };
       }
     }
-    return undefined;
+    return { misordered };
   };
 
   // Sugar form: `"exports": { "import": "...", "types": "..." }` (no subpaths)
@@ -88,40 +108,63 @@ export function inspectExportsForTypes(
     : false;
 
   if (!hasSubpaths) {
-    const entry = visitConditions(exports);
+    const { entry, misordered } = visitConditions(exports);
     if (entry) {
-      return { found: true, rootEntry: entry, subpathCount: 1 };
+      return {
+        found: true,
+        rootEntry: entry,
+        subpathCount: 1,
+        misorderedSubpaths: misordered ? ["."] : [],
+      };
     }
-    return { found: false, subpathCount: 0 };
+    return { found: false, subpathCount: 0, misorderedSubpaths: [] };
   }
 
   let subpathCount = 0;
   let dotEntry: string | undefined;
   let firstEntry: string | undefined;
+  const misorderedSubpaths: string[] = [];
   for (const [subpath, value] of Object.entries(exports)) {
     if (!subpath.startsWith(".")) continue;
-    const entry = visitConditions(value);
+    const { entry, misordered } = visitConditions(value);
     if (entry) {
       subpathCount++;
       if (subpath === ".") dotEntry = entry;
       else if (!firstEntry) firstEntry = entry;
     }
+    if (misordered) misorderedSubpaths.push(subpath);
   }
 
-  if (subpathCount === 0) return { found: false, subpathCount: 0 };
-  return { found: true, rootEntry: dotEntry ?? firstEntry, subpathCount };
+  if (subpathCount === 0) return { found: false, subpathCount: 0, misorderedSubpaths };
+  return {
+    found: true,
+    rootEntry: dotEntry ?? firstEntry,
+    subpathCount,
+    misorderedSubpaths,
+  };
 }
 
 export function detectTypesEntry(versionData: NpmPackageVersion): {
   entry?: string;
-  source: "types" | "typings" | "exports" | "none";
+  source: "types" | "typings" | "exports" | "typesVersions" | "none";
   exportsSubpathCount: number;
+  misorderedSubpaths: string[];
 } {
   if (versionData.types) {
-    return { entry: versionData.types, source: "types", exportsSubpathCount: 0 };
+    return {
+      entry: versionData.types,
+      source: "types",
+      exportsSubpathCount: 0,
+      misorderedSubpaths: [],
+    };
   }
   if (versionData.typings) {
-    return { entry: versionData.typings, source: "typings", exportsSubpathCount: 0 };
+    return {
+      entry: versionData.typings,
+      source: "typings",
+      exportsSubpathCount: 0,
+      misorderedSubpaths: [],
+    };
   }
   const fromExports = inspectExportsForTypes(versionData.exports);
   if (fromExports.found) {
@@ -129,9 +172,19 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
       entry: fromExports.rootEntry,
       source: "exports",
       exportsSubpathCount: fromExports.subpathCount,
+      misorderedSubpaths: fromExports.misorderedSubpaths,
     };
   }
-  return { source: "none", exportsSubpathCount: 0 };
+  // typesVersions maps TypeScript versions to bundled .d.ts paths — its
+  // presence alone means the package ships type definitions.
+  if (versionData.typesVersions && Object.keys(versionData.typesVersions).length > 0) {
+    return {
+      source: "typesVersions",
+      exportsSubpathCount: 0,
+      misorderedSubpaths: [],
+    };
+  }
+  return { source: "none", exportsSubpathCount: 0, misorderedSubpaths: [] };
 }
 
 export function registerTypesCheckTool(server: McpServer): void {
@@ -141,14 +194,16 @@ export function registerTypesCheckTool(server: McpServer): void {
       title: "Check npm Package TypeScript Support",
       description: `Check whether an npm package ships TypeScript type definitions.
 
-Detects bundled types from three sources (in priority order):
+Detects bundled types from four sources (in priority order):
   1. \`types\` field
   2. \`typings\` field
   3. \`exports\` map with a \`types\` condition (modern conditional exports)
+  4. \`typesVersions\` map (TS-version-specific bundled declarations)
 
 Also checks for a DefinitelyTyped (@types/) companion package when no
-bundled types are found, and surfaces \`typesVersions\` (TS-version-specific
-type maps) when present.
+bundled types are found — including whether it is a deprecated stub — and
+warns when a \`types\` condition is not listed first in \`exports\`
+(TypeScript ignores it otherwise).
 
 Args:
   - package_name (string): The npm package name
@@ -176,10 +231,7 @@ Examples:
     },
     async ({ package_name, version }) => {
       try {
-        const versionData = await fetchPackageVersion(
-          package_name,
-          version?.trim() || "latest"
-        );
+        const versionData = await fetchResolvedVersion(package_name, version);
         const targetVersion = versionData.version;
         const detection = detectTypesEntry(versionData);
         const hasBundledTypes = detection.source !== "none";
@@ -189,7 +241,9 @@ Examples:
 
         // A transient DefinitelyTyped lookup failure should not discard the
         // bundled-types detection we already have — degrade to a notice.
-        let dtResult: { exists: boolean; version?: string } = { exists: false };
+        let dtResult: Awaited<ReturnType<typeof checkDefinitelyTyped>> = {
+          exists: false,
+        };
         let dtError: string | undefined;
         if (!hasBundledTypes) {
           try {
@@ -214,7 +268,9 @@ Examples:
               ? "package.json `types` field"
               : detection.source === "typings"
                 ? "package.json `typings` field"
-                : "package.json `exports` map (`types` condition)";
+                : detection.source === "exports"
+                  ? "package.json `exports` map (`types` condition)"
+                  : "package.json `typesVersions` map";
           lines.push(`**Source:** ${sourceLabel}`);
           if (detection.source === "exports" && detection.exportsSubpathCount > 1) {
             lines.push(
@@ -225,6 +281,12 @@ Examples:
             const tsRanges = Object.keys(versionData.typesVersions ?? {}).join(", ");
             lines.push(`**typesVersions:** ${tsRanges}`);
           }
+          if (detection.misorderedSubpaths.length > 0) {
+            lines.push("");
+            lines.push(
+              `> **Warning:** a \`types\` condition is not listed first in \`exports\` for ${detection.misorderedSubpaths.join(", ")} — TypeScript resolves conditions in order and may ignore it.`
+            );
+          }
           lines.push("");
           lines.push(
             "This package ships its own TypeScript type definitions. No additional @types/ package needed."
@@ -232,12 +294,26 @@ Examples:
         } else if (dtResult.exists) {
           const typesName = typesPackageName(package_name);
           lines.push(`**Bundled Types:** No`);
-          lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);
-          lines.push("");
-          lines.push("Install types separately:");
-          lines.push(`\`\`\`bash`);
-          lines.push(`npm install -D ${typesName}`);
-          lines.push(`\`\`\``);
+          if (dtResult.deprecated) {
+            // Deprecated @types stubs mean the library ships its own types
+            // (that our detection can't see) — installing the stub is wrong.
+            lines.push(
+              `**DefinitelyTyped:** ${typesName}@${dtResult.version} exists but is a deprecated stub`
+            );
+            lines.push("");
+            lines.push(`> ${dtResult.deprecated}`);
+            lines.push("");
+            lines.push(
+              "Do **not** install the @types package — the library provides its own type definitions (declared in a way this check does not detect, e.g. alongside the JS entry point)."
+            );
+          } else {
+            lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);
+            lines.push("");
+            lines.push("Install types separately:");
+            lines.push(`\`\`\`bash`);
+            lines.push(`npm install -D ${typesName}`);
+            lines.push(`\`\`\``);
+          }
         } else if (dtError) {
           lines.push(`**Bundled Types:** No`);
           lines.push(`**DefinitelyTyped:** Unknown (check failed: ${dtError})`);

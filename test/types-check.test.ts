@@ -8,6 +8,7 @@ describe("inspectExportsForTypes", () => {
     assert.deepEqual(inspectExportsForTypes("./index.js"), {
       found: false,
       subpathCount: 0,
+      misorderedSubpaths: [],
     });
   });
 
@@ -15,8 +16,13 @@ describe("inspectExportsForTypes", () => {
     assert.deepEqual(inspectExportsForTypes(undefined), {
       found: false,
       subpathCount: 0,
+      misorderedSubpaths: [],
     });
-    assert.deepEqual(inspectExportsForTypes(null), { found: false, subpathCount: 0 });
+    assert.deepEqual(inspectExportsForTypes(null), {
+      found: false,
+      subpathCount: 0,
+      misorderedSubpaths: [],
+    });
   });
 
   it("detects the sugar form without subpaths", () => {
@@ -28,6 +34,7 @@ describe("inspectExportsForTypes", () => {
       found: true,
       rootEntry: "./index.d.ts",
       subpathCount: 1,
+      misorderedSubpaths: [],
     });
   });
 
@@ -48,6 +55,7 @@ describe("inspectExportsForTypes", () => {
       found: true,
       rootEntry: "./index.d.ts",
       subpathCount: 2,
+      misorderedSubpaths: [],
     });
   });
 
@@ -87,7 +95,36 @@ describe("inspectExportsForTypes", () => {
     const result = inspectExportsForTypes({
       ".": { import: "./index.mjs", require: "./index.cjs" },
     });
-    assert.deepEqual(result, { found: false, subpathCount: 0 });
+    assert.deepEqual(result, {
+      found: false,
+      subpathCount: 0,
+      misorderedSubpaths: [],
+    });
+  });
+
+  it("flags a types condition placed after default (TS ignores it)", () => {
+    const result = inspectExportsForTypes({
+      ".": { import: "./index.mjs", default: "./index.js", types: "./index.d.ts" },
+    });
+    assert.equal(result.found, true);
+    assert.deepEqual(result.misorderedSubpaths, ["."]);
+  });
+
+  it("flags misordered types@<version> conditions in the sugar form", () => {
+    const result = inspectExportsForTypes({
+      default: "./index.js",
+      "types@<5.4": "./ts53/index.d.ts",
+    });
+    assert.equal(result.found, true);
+    assert.equal(result.rootEntry, "./ts53/index.d.ts");
+    assert.deepEqual(result.misorderedSubpaths, ["."]);
+  });
+
+  it("does not flag correctly ordered types conditions", () => {
+    const result = inspectExportsForTypes({
+      ".": { types: "./index.d.ts", import: "./index.mjs", default: "./index.js" },
+    });
+    assert.deepEqual(result.misorderedSubpaths, []);
   });
 });
 
@@ -112,6 +149,19 @@ describe("detectTypesEntry", () => {
     });
     assert.equal(result.source, "exports");
     assert.equal(result.entry, "./t.d.ts");
+  });
+
+  it("detects typesVersions-only packages as bundled", () => {
+    const result = detectTypesEntry({
+      ...base,
+      typesVersions: { ">=4.0": { "*": ["ts4.0/*"] } },
+    });
+    assert.equal(result.source, "typesVersions");
+  });
+
+  it("ignores an empty typesVersions map", () => {
+    const result = detectTypesEntry({ ...base, typesVersions: {} });
+    assert.equal(result.source, "none");
   });
 
   it("reports none when nothing declares types", () => {
