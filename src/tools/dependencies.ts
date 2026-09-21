@@ -77,7 +77,7 @@ export function resolveDependencySpec(
   const trimmed = raw.trim();
 
   if (trimmed.startsWith("npm:")) {
-    const spec = trimmed.slice(4);
+    const spec = trimmed.slice(4).trim();
     const isScoped = spec.startsWith("@");
     const at = isScoped ? spec.indexOf("@", 1) : spec.indexOf("@");
     if (at > 0) {

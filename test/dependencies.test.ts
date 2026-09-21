@@ -80,6 +80,13 @@ describe("resolveDependencySpec", () => {
     assert.equal(resolveDependencySpec("foo", "bitbucket:user/repo"), null);
     assert.equal(resolveDependencySpec("foo", "gist:11081aaa2815d66ee"), null);
   });
+
+  it("tolerates whitespace inside npm: aliases", () => {
+    assert.deepEqual(resolveDependencySpec("foo", "npm: bar@^1"), {
+      name: "bar",
+      hint: "^1",
+    });
+  });
 });
 
 describe("formatDeps", () => {
