@@ -75,11 +75,7 @@ describe("formatScoreReport", () => {
     const text = formatScoreReport({
       packageName: "newpkg",
       npms: null,
-      registryMeta: {
-        name: "newpkg",
-        "dist-tags": { latest: "1.2.3" },
-        time: { modified: "2025-06-01" },
-      },
+      registryMeta: { latest: "1.2.3", modified: "2025-06-01" },
       downloads: {
         lastMonth: { downloads: 99, start: "s", end: "e", package: "newpkg" },
       },

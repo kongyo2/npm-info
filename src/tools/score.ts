@@ -1,17 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  fetchAbbreviatedPackument,
   fetchNpmDownloads,
   fetchNpmsScore,
-  fetchPackageMetadata,
   HttpError,
 } from "../services/npm-api.js";
 import { errorMessage, errorResult, textResult } from "./shared.js";
-import type {
-  NpmDownloadsResponse,
-  NpmRegistryResponse,
-  NpmsPackageResponse,
-} from "../types.js";
+import type { NpmDownloadsResponse, NpmsPackageResponse } from "../types.js";
 
 const ScoreInputSchema = {
   package_name: z
@@ -59,8 +55,8 @@ export interface ScoreReportInput {
   npms: NpmsPackageResponse | null;
   /** Human-readable npms.io failure (non-404), when it happened. */
   npmsError?: string;
-  /** npm registry metadata used to frame the no-score fallback report. */
-  registryMeta?: NpmRegistryResponse;
+  /** Registry facts used to frame the no-score fallback report. */
+  registryMeta?: { latest?: string; modified?: string };
   downloads: {
     lastWeek?: NpmDownloadsResponse;
     lastMonth?: NpmDownloadsResponse;
@@ -175,10 +171,9 @@ export function formatScoreReport(input: ScoreReportInput): string[] {
       "**npms.io:** no analysis available — its public index has been frozen since early 2023, so packages created or updated since then are unscored."
     );
     if (registryMeta) {
-      const latest = registryMeta["dist-tags"]?.latest;
       const parts = [
-        latest ? `latest ${latest}` : undefined,
-        registryMeta.time?.modified ? `updated ${registryMeta.time.modified}` : undefined,
+        registryMeta.latest ? `latest ${registryMeta.latest}` : undefined,
+        registryMeta.modified ? `updated ${registryMeta.modified}` : undefined,
       ].filter(Boolean);
       if (parts.length > 0) lines.push(`**Registry:** ${parts.join(", ")}`);
     }
@@ -267,12 +262,20 @@ Examples:
         }
 
         const is404 = npmsRes.error instanceof HttpError && npmsRes.error.status === 404;
-        let registryMeta: NpmRegistryResponse | undefined;
+        let registryMeta: { latest?: string; modified?: string } | undefined;
         if (is404) {
           // npms.io 404 today usually means "index frozen before this package
           // existed" — confirm the package itself exists before reporting it.
-          registryMeta = await fetchPackageMetadata(package_name).catch(() => undefined);
-          if (!registryMeta) return errorResult(npmsRes.error);
+          // The abbreviated packument is enough (and far smaller than the
+          // full document for packages with many versions).
+          const packument = await fetchAbbreviatedPackument(package_name).catch(
+            () => undefined
+          );
+          if (!packument) return errorResult(npmsRes.error);
+          registryMeta = {
+            latest: packument["dist-tags"]?.latest,
+            modified: packument.modified,
+          };
         }
         const hasDownloads = !!(downloads.lastWeek || downloads.lastMonth);
         if (!is404 && !hasDownloads) return errorResult(npmsRes.error);
