@@ -56,7 +56,10 @@ export function collectVersionRows(
       version: ver,
       date: time[ver],
       tags: tagLookup.get(ver) ?? [],
-      deprecated: allVersions[ver]?.deprecated,
+      deprecated:
+        typeof allVersions[ver]?.deprecated === "string"
+          ? allVersions[ver].deprecated
+          : undefined,
     }));
 
   return { rows, total };

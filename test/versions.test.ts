@@ -64,4 +64,17 @@ describe("collectVersionRows", () => {
     const { rows } = collectVersionRows(meta, 20);
     assert.equal(rows[0].deprecated, "do not use");
   });
+
+  it("ignores non-string deprecated values", () => {
+    const meta = metadata(["1.0.0"], { "1.0.0": "2020-01-01" });
+    meta.versions = {
+      "1.0.0": {
+        name: "pkg",
+        version: "1.0.0",
+        deprecated: { reason: "x" } as unknown as string,
+      },
+    };
+    const { rows } = collectVersionRows(meta, 20);
+    assert.equal(rows[0].deprecated, undefined);
+  });
 });

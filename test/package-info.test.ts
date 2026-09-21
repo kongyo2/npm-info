@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   formatLicense,
   formatRepository,
@@ -7,6 +8,7 @@ import {
   formatEngines,
   formatKeywords,
   formatMaintainer,
+  registerPackageInfoTool,
 } from "../src/tools/package-info.js";
 
 describe("formatLicense", () => {
@@ -146,5 +148,41 @@ describe("formatMaintainer", () => {
     assert.equal(formatMaintainer("octocat"), "octocat");
     assert.equal(formatMaintainer({ name: "oc", email: "oc@x.dev" }), "oc <oc@x.dev>");
     assert.equal(formatMaintainer({}), "unknown");
+  });
+});
+
+describe("npm_package_info handler", () => {
+  it("does not print a non-string deprecated marker", async (t) => {
+    type Handler = (args: {
+      package_name: string;
+    }) => Promise<{ content: { text: string }[] }>;
+    let handler: Handler | undefined;
+    registerPackageInfoTool({
+      registerTool: (_name: string, _spec: unknown, h: Handler) => {
+        handler = h;
+      },
+    } as unknown as McpServer);
+    assert.ok(handler);
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            name: "pkg",
+            "dist-tags": { latest: "1.0.0" },
+            versions: {
+              "1.0.0": {
+                name: "pkg",
+                version: "1.0.0",
+                deprecated: { reason: "x" },
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    const res = await handler({ package_name: "pkg" });
+    assert.doesNotMatch(res.content[0].text, /DEPRECATED|object Object/);
   });
 });

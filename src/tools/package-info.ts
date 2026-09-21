@@ -199,7 +199,7 @@ Examples:
             lines.push(`**TypeScript:** Bundled types (${sourceLabel})`);
           }
 
-          if (latestVersion.deprecated) {
+          if (typeof latestVersion.deprecated === "string") {
             lines.push("");
             lines.push(`> **DEPRECATED:** ${latestVersion.deprecated}`);
           }
