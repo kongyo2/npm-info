@@ -4,6 +4,12 @@ import {
   validatePackageName,
   typesPackageName,
   extractGitHubRepo,
+  fetchPackageMetadata,
+  fetchResolvedVersion,
+  checkDefinitelyTyped,
+  fetchNpmDownloads,
+  fetchGitHubReadme,
+  fetchAbbreviatedPackument,
 } from "../src/services/npm-api.js";
 
 describe("validatePackageName", () => {
@@ -98,12 +104,529 @@ describe("extractGitHubRepo", () => {
     );
   });
 
+  it("parses bare owner/repo shorthand as GitHub", () => {
+    assert.deepEqual(extractGitHubRepo("bower/bower"), {
+      owner: "bower",
+      repo: "bower",
+    });
+    assert.deepEqual(
+      extractGitHubRepo({ type: "git", url: "node-formidable/formidable" }),
+      {
+        owner: "node-formidable",
+        repo: "formidable",
+      }
+    );
+  });
+
+  it("accepts the legacy `path` field as the monorepo directory", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "git+ssh://git@github.com/tapjs/tapjs.git",
+        path: "src/tap",
+      }),
+      { owner: "tapjs", repo: "tapjs", directory: "src/tap" }
+    );
+  });
+
+  it("extracts the subdirectory from a /tree/ URL", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/babel/babel/tree/master/packages/babel-core",
+      }),
+      { owner: "babel", repo: "babel", directory: "packages/babel-core", ref: "master" }
+    );
+    assert.deepEqual(extractGitHubRepo("https://github.com/babel/babel/tree/master"), {
+      owner: "babel",
+      repo: "babel",
+      ref: "master",
+    });
+    assert.deepEqual(extractGitHubRepo("https://github.com/a/b/tree/HEAD/pkg"), {
+      owner: "a",
+      repo: "b",
+      directory: "pkg",
+    });
+  });
+
+  it("prefers the explicit directory field over a /tree/ URL path", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/babel/babel/tree/master/packages/babel-core",
+        directory: "packages/babel-preset",
+      }),
+      { owner: "babel", repo: "babel", directory: "packages/babel-preset", ref: "master" }
+    );
+  });
+
+  it("normalizes empty, dot and dot-dot directory segments", () => {
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/a/b.git",
+        directory: "/pkgs/./core//",
+      }),
+      { owner: "a", repo: "b", directory: "pkgs/core" }
+    );
+    assert.deepEqual(
+      extractGitHubRepo({
+        type: "git",
+        url: "https://github.com/a/b.git",
+        directory: "..",
+      }),
+      { owner: "a", repo: "b" }
+    );
+  });
+
+  it("still rejects /blob/ URLs", () => {
+    assert.equal(extractGitHubRepo("https://github.com/o/r/blob/master/README.md"), null);
+  });
+
   it("returns null for non-GitHub hosts", () => {
     assert.equal(extractGitHubRepo("https://gitlab.com/x/y"), null);
+    assert.equal(extractGitHubRepo("https://gitlab.com/x/y.git"), null);
   });
 
   it("returns null when repository is missing or has no url", () => {
     assert.equal(extractGitHubRepo(undefined), null);
     assert.equal(extractGitHubRepo({ type: "git" }), null);
+  });
+
+  it("tolerates non-string url and directory values", () => {
+    assert.equal(
+      extractGitHubRepo({
+        url: 42,
+      } as unknown as Parameters<typeof extractGitHubRepo>[0]),
+      null
+    );
+    assert.deepEqual(
+      extractGitHubRepo({
+        url: "https://github.com/a/b.git",
+        directory: { path: "x" },
+      } as unknown as Parameters<typeof extractGitHubRepo>[0]),
+      { owner: "a", repo: "b" }
+    );
+  });
+});
+
+function jsonResponse(
+  body: unknown,
+  init: { status?: number; headers?: Record<string, string> } = {}
+): Response {
+  return new Response(JSON.stringify(body), {
+    status: init.status ?? 200,
+    headers: { "content-type": "application/json", ...init.headers },
+  });
+}
+
+describe("fetchPackageMetadata", () => {
+  it("sends a User-Agent header", async (t) => {
+    let seenUA: string | null = null;
+    t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
+      seenUA = new Headers(init?.headers).get("user-agent");
+      return jsonResponse({ name: "react" });
+    });
+    await fetchPackageMetadata("react");
+    assert.equal(seenUA, "npm-info-mcp-server");
+  });
+
+  it("retries once on 429 honoring Retry-After", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse({}, { status: 429, headers: { "retry-after": "0.01" } })
+        : jsonResponse({ name: "react" });
+    });
+    const meta = await fetchPackageMetadata("react");
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("honors an HTTP-date Retry-After header", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: {
+                "retry-after": new Date(Date.now() + 2000).toUTCString(),
+              },
+            }
+          )
+        : jsonResponse({ name: "react" });
+    });
+    const pending = fetchPackageMetadata("react");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1);
+    t.mock.timers.tick(2000);
+    const meta = await pending;
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("treats a past HTTP-date Retry-After as no wait", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" },
+            }
+          )
+        : jsonResponse({ name: "react" });
+    });
+    const meta = await fetchPackageMetadata("react");
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("retries immediately on Retry-After: 0", async (t) => {
+    let calls = 0;
+    const started = Date.now();
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return calls === 1
+        ? jsonResponse({}, { status: 429, headers: { "retry-after": "0" } })
+        : jsonResponse({ name: "react" });
+    });
+    await fetchPackageMetadata("react");
+    assert.equal(calls, 2);
+    assert.ok(Date.now() - started < 900);
+  });
+
+  it("still retries when draining the retried body fails", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      if (calls === 1) {
+        const response = new Response("{}", {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+        response.body?.getReader();
+        return response;
+      }
+      return jsonResponse({ name: "react" });
+    });
+    const meta = await fetchPackageMetadata("react");
+    assert.equal(meta.name, "react");
+    assert.equal(calls, 2);
+  });
+
+  it("does not retry non-retryable statuses", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({}, { status: 404 });
+    });
+    await assert.rejects(fetchPackageMetadata("react"), /not found on npm/);
+    assert.equal(calls, 1);
+  });
+
+  it("times out while the body is still streaming", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          init?.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError"))
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const pending = fetchPackageMetadata("react");
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(15_000);
+    await assert.rejects(pending, /timed out after 15000ms/);
+  });
+
+  it("wraps invalid JSON with a descriptive error", async (t) => {
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () => new Response("this is not json", { status: 200 })
+    );
+    await assert.rejects(
+      fetchPackageMetadata("react"),
+      /Invalid JSON in the response from registry\.npmjs\.org/
+    );
+  });
+});
+
+const packumentFor = (versions: string[]) => ({
+  name: "pkg",
+  "dist-tags": { latest: versions[versions.length - 1] },
+  versions: Object.fromEntries(versions.map((v) => [v, { name: "pkg", version: v }])),
+});
+
+describe("fetchResolvedVersion", () => {
+  it("fetches an exact version directly", async (t) => {
+    const urls: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      urls.push(String(url));
+      return jsonResponse({ name: "pkg", version: "1.2.3" });
+    });
+    const v = await fetchResolvedVersion("pkg", "1.2.3");
+    assert.equal(v.version, "1.2.3");
+    assert.equal(urls.length, 1);
+    assert.match(urls[0], /\/pkg\/1\.2\.3$/);
+  });
+
+  it("resolves a semver range via the abbreviated packument", async (t) => {
+    const packument = packumentFor(["1.0.0", "1.5.0", "2.0.0"]);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg/%5E1")) {
+        return jsonResponse("version not found: pkg@^1", { status: 404 });
+      }
+      if (u.endsWith("/pkg/1.5.0")) {
+        return jsonResponse({ name: "pkg", version: "1.5.0" });
+      }
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      return jsonResponse({}, { status: 500 });
+    });
+    const v = await fetchResolvedVersion("pkg", "^1");
+    assert.equal(v.version, "1.5.0");
+  });
+
+  it("falls back to range resolution on other 4xx statuses", async (t) => {
+    const packument = packumentFor(["1.0.0", "4.1.0", "4.2.0", "5.0.0"]);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      if (u.endsWith("/pkg/4.2.0")) {
+        return jsonResponse({ name: "pkg", version: "4.2.0" });
+      }
+      return jsonResponse("not allowed", { status: 405 });
+    });
+    const v = await fetchResolvedVersion("pkg", ">=4 <5");
+    assert.equal(v.version, "4.2.0");
+  });
+
+  it("resolves dist-tags from the packument when the direct lookup fails", async (t) => {
+    const packument = {
+      ...packumentFor(["1.0.0", "2.0.0-rc.1"]),
+      "dist-tags": { latest: "1.0.0", beta: "2.0.0-rc.1" },
+    };
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      if (u.endsWith("/pkg/2.0.0-rc.1")) {
+        return jsonResponse({ name: "pkg", version: "2.0.0-rc.1" });
+      }
+      return jsonResponse("version not found", { status: 404 });
+    });
+    const v = await fetchResolvedVersion("pkg", "beta");
+    assert.equal(v.version, "2.0.0-rc.1");
+  });
+
+  it("gives up on an abbreviated packument whose deadline has passed", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({ name: "pkg" });
+    });
+    await assert.rejects(fetchAbbreviatedPackument("pkg", Date.now() - 1), /timed out/);
+    assert.equal(calls, 0);
+  });
+
+  it("does not retry a 429 when the deadline would be missed", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({}, { status: 429, headers: { "retry-after": "5" } });
+    });
+    await assert.rejects(
+      fetchAbbreviatedPackument("pkg", Date.now() + 2_000),
+      /status 429/
+    );
+    assert.equal(calls, 1);
+  });
+
+  it("tolerates non-object dist-tags and versions maps in the fallback", async (t) => {
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) {
+        return jsonResponse({ name: "pkg", "dist-tags": "latest", versions: "1.0.0" });
+      }
+      return jsonResponse("version not found", { status: 404 });
+    });
+    await assert.rejects(fetchResolvedVersion("pkg", "^1"), /No published version/);
+  });
+
+  it("errors when no published version satisfies the range", async (t) => {
+    const packument = packumentFor(["1.0.0", "1.5.0"]);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      return jsonResponse("version not found: pkg@^9", { status: 404 });
+    });
+    await assert.rejects(
+      fetchResolvedVersion("pkg", "^9"),
+      /No published version of "pkg" satisfies "\^9"/
+    );
+  });
+
+  it("propagates non-404 failures without falling back", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({}, { status: 500 });
+    });
+    await assert.rejects(fetchResolvedVersion("pkg", "1.0.0"), /status 500/);
+    assert.equal(calls, 1);
+  });
+});
+
+describe("checkDefinitelyTyped", () => {
+  it("reports a deprecated stub", async (t) => {
+    t.mock.method(globalThis, "fetch", async () =>
+      jsonResponse({
+        name: "@types/foo",
+        version: "1.0.0",
+        deprecated:
+          "This is a stub types definition. foo provides its own type definitions.",
+      })
+    );
+    const result = await checkDefinitelyTyped("foo");
+    assert.equal(result.exists, true);
+    assert.equal(result.version, "1.0.0");
+    assert.match(result.deprecated ?? "", /stub types definition/);
+  });
+
+  it("rejects invalid package names before any request", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({});
+    });
+    await assert.rejects(checkDefinitelyTyped("a/b/c"), /Invalid package name/);
+    assert.equal(calls, 0);
+  });
+
+  it("returns exists:false on 404", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => jsonResponse({}, { status: 404 }));
+    assert.deepEqual(await checkDefinitelyTyped("foo"), { exists: false });
+  });
+});
+
+describe("fetchNpmDownloads", () => {
+  it("returns both windows", async (t) => {
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("last-week")) {
+        return jsonResponse({ downloads: 10, start: "a", end: "b", package: "x" });
+      }
+      return jsonResponse({ downloads: 40, start: "a", end: "b", package: "x" });
+    });
+    const d = await fetchNpmDownloads("x");
+    assert.equal(d.lastWeek?.downloads, 10);
+    assert.equal(d.lastMonth?.downloads, 40);
+  });
+
+  it("rejects invalid package names before any request", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({});
+    });
+    await assert.rejects(fetchNpmDownloads("a/b/c"), /Invalid package name/);
+    assert.equal(calls, 0);
+  });
+
+  it("tolerates a single failed window", async (t) => {
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("last-week")) return jsonResponse({}, { status: 500 });
+      return jsonResponse({ downloads: 40, start: "a", end: "b", package: "x" });
+    });
+    const d = await fetchNpmDownloads("x");
+    assert.equal(d.lastWeek, undefined);
+    assert.equal(d.lastMonth?.downloads, 40);
+  });
+});
+
+describe("fetchGitHubReadme", () => {
+  it("falls back to raw.githubusercontent.com when the API is unavailable", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.startsWith("https://api.github.com/")) {
+        return new Response("rate limited", { status: 403 });
+      }
+      if (u.endsWith("/HEAD/Readme.md"))
+        return new Response("# Express", { status: 200 });
+      return new Response("Not Found", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("expressjs", "express"), "# Express");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/expressjs/express/readme",
+      "https://raw.githubusercontent.com/expressjs/express/HEAD/README.md",
+      "https://raw.githubusercontent.com/expressjs/express/HEAD/Readme.md",
+    ]);
+  });
+
+  it("tries the parsed ref before HEAD for both the API and raw lookups", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.endsWith("/HEAD/pkg/README.md"))
+        return new Response("# head", { status: 200 });
+      return new Response("nope", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("o", "r", "pkg", "develop"), "# head");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/o/r/readme/pkg?ref=develop",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/README.md",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/Readme.md",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/readme.md",
+      "https://api.github.com/repos/o/r/readme/pkg",
+      "https://raw.githubusercontent.com/o/r/HEAD/pkg/README.md",
+    ]);
+  });
+
+  it("prefers the API response and keeps the monorepo directory", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      seen.push(String(url));
+      return new Response("# next", { status: 200 });
+    });
+    assert.equal(await fetchGitHubReadme("vercel", "next.js", "packages/next"), "# next");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/vercel/next.js/readme/packages/next",
+    ]);
+  });
+
+  it("stops trying README candidates once its overall deadline passes", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"] });
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      t.mock.timers.tick(20_000);
+      return new Response("nope", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("o", "r", "pkg", "develop"), null);
+    assert.equal(calls, 1);
+  });
+
+  it("returns null when every source fails", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response("nope", { status: 404 }));
+    assert.equal(await fetchGitHubReadme("o", "r"), null);
   });
 });

@@ -2,11 +2,13 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchPackageMetadata } from "../services/npm-api.js";
 import { DEFAULT_VERSIONS_LIMIT } from "../constants.js";
-import { errorResult, textResult } from "./shared.js";
+import type { NpmRegistryResponse } from "../types.js";
+import { errorResult, recordOf, textResult } from "./shared.js";
 
 const VersionsInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
   limit: z
@@ -19,6 +21,60 @@ const VersionsInputSchema = {
       "Maximum number of versions to return, sorted by most recent (default: 20)"
     ),
 };
+
+export interface VersionRow {
+  version: string;
+  date?: string;
+  tags: string[];
+  deprecated?: string;
+}
+
+export function collectVersionRows(
+  metadata: NpmRegistryResponse,
+  limit: number
+): { rows: VersionRow[]; total: number } {
+  const allVersions =
+    metadata.versions &&
+    typeof metadata.versions === "object" &&
+    !Array.isArray(metadata.versions)
+      ? metadata.versions
+      : {};
+  const time =
+    metadata.time && typeof metadata.time === "object" && !Array.isArray(metadata.time)
+      ? metadata.time
+      : {};
+  const total = Object.keys(allVersions).length;
+
+  const tagLookup = new Map<string, string[]>();
+  for (const [tag, ver] of Object.entries(
+    recordOf<string>(metadata["dist-tags"]) ?? {}
+  )) {
+    if (typeof ver !== "string") continue;
+    const existing = tagLookup.get(ver) ?? [];
+    existing.push(tag);
+    tagLookup.set(ver, existing);
+  }
+
+  const publishTime = (v: string): number => {
+    const ms = new Date(time[v] ?? "").getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  };
+
+  const rows = Object.keys(allVersions)
+    .sort((a, b) => publishTime(b) - publishTime(a))
+    .slice(0, limit)
+    .map((ver) => ({
+      version: ver,
+      date: typeof time[ver] === "string" ? time[ver] : undefined,
+      tags: tagLookup.get(ver) ?? [],
+      deprecated:
+        typeof allVersions[ver]?.deprecated === "string"
+          ? allVersions[ver].deprecated
+          : undefined,
+    }));
+
+  return { rows, total };
+}
 
 export function registerVersionsTool(server: McpServer): void {
   server.registerTool(
@@ -52,49 +108,24 @@ Examples:
     async ({ package_name, limit }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
-        const allVersions = metadata.versions ?? {};
-        const time = metadata.time ?? {};
-        const totalVersions = Object.keys(allVersions).length;
+        const { rows, total } = collectVersionRows(metadata, limit);
 
-        if (totalVersions === 0 || !metadata.time) {
+        if (total === 0) {
           return textResult(`No version information available for "${package_name}".`);
         }
-
-        const distTags = metadata["dist-tags"] ?? {};
-        const tagLookup = new Map<string, string[]>();
-        for (const [tag, ver] of Object.entries(distTags)) {
-          const existing = tagLookup.get(ver) ?? [];
-          existing.push(tag);
-          tagLookup.set(ver, existing);
-        }
-
-        const publishTime = (v: string): number => {
-          const ms = new Date(time[v]).getTime();
-          return Number.isNaN(ms) ? 0 : ms;
-        };
-        const versions = Object.keys(allVersions)
-          .filter((v) => time[v])
-          .sort((a, b) => publishTime(b) - publishTime(a))
-          .slice(0, limit);
 
         const lines: string[] = [
           `# ${package_name} - Versions`,
           "",
-          `Total versions: ${totalVersions} (showing ${versions.length} most recent)`,
+          `Total versions: ${total} (showing ${rows.length} most recent)`,
           "",
         ];
 
-        for (const ver of versions) {
-          const date = time[ver];
-          const tags = tagLookup.get(ver);
-          const versionData = allVersions[ver];
-          let line = `- **${ver}** (${date})`;
-          if (tags?.length) {
-            line += ` [${tags.join(", ")}]`;
-          }
-          if (versionData?.deprecated) {
-            line += ` **DEPRECATED**: ${versionData.deprecated}`;
-          }
+        for (const row of rows) {
+          let line = `- **${row.version}**`;
+          if (row.date) line += ` (${row.date})`;
+          if (row.tags.length) line += ` [${row.tags.join(", ")}]`;
+          if (row.deprecated) line += ` **DEPRECATED**: ${row.deprecated}`;
           lines.push(line);
         }
 

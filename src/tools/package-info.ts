@@ -1,33 +1,115 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageMetadata } from "../services/npm-api.js";
-import type { NpmPackageVersion, NpmRegistryResponse } from "../types.js";
-import { errorResult, textResult } from "./shared.js";
+import { extractGitHubRepo, fetchPackageMetadata } from "../services/npm-api.js";
+import { detectTypesEntry } from "./types-check.js";
+import type { LicenseRef, NpmPackageVersion, NpmRegistryResponse } from "../types.js";
+import { errorResult, recordOf, textResult } from "./shared.js";
 
 const PackageInfoInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name (e.g., 'react', '@types/node', 'lodash')"),
 };
 
-function formatRepository(repo: NpmRegistryResponse["repository"]): string | undefined {
-  if (!repo) return undefined;
-  if (typeof repo === "string") return repo;
-  if (typeof repo.url === "string") {
-    return repo.url.replace(/^git\+/, "").replace(/\.git$/, "");
-  }
-  return undefined;
+function formatLicenseRef(l: LicenseRef): string | undefined {
+  const name =
+    typeof l.type === "string" && l.type
+      ? l.type
+      : typeof l.name === "string" && l.name
+        ? l.name
+        : undefined;
+  const url = typeof l.url === "string" && l.url ? l.url : undefined;
+  if (!name) return url;
+  return url ? `${name} (${url})` : name;
 }
 
-function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
+export function formatLicense(
+  license: string | LicenseRef | Array<LicenseRef | string> | undefined,
+  licenses?: Array<LicenseRef | string>
+): string | undefined {
+  if (typeof license === "string") return license;
+  const list = Array.isArray(license) ? license : license ? [license] : (licenses ?? []);
+  const names = list
+    .map((l) =>
+      typeof l === "string"
+        ? l
+        : l && typeof l === "object"
+          ? formatLicenseRef(l)
+          : undefined
+    )
+    .filter((s): s is string => !!s);
+  return names.length > 0 ? names.join(", ") : undefined;
+}
+
+export function formatRepository(
+  repo: NpmRegistryResponse["repository"]
+): string | undefined {
+  if (!repo) return undefined;
+  const url = typeof repo === "string" ? repo : repo.url;
+  if (!url || typeof url !== "string") return undefined;
+
+  const github = extractGitHubRepo(repo);
+  if (github) {
+    const base = `https://github.com/${github.owner}/${github.repo}`;
+    return github.directory
+      ? `${base}/tree/${github.ref ?? "HEAD"}/${github.directory}`
+      : base;
+  }
+
+  return url
+    .replace(/^git\+/, "")
+    .replace(/^git@([^:]+):/, "https://$1/")
+    .replace(/^(?:git|ssh):\/\/(?:git@)?/, "https://")
+    .replace(/^http:\/\//, "https://")
+    .replace(/#.*$/, "")
+    .replace(/\.git\/?$/, "")
+    .replace(/\/$/, "");
+}
+
+export function formatAuthor(author: NpmPackageVersion["author"]): string | undefined {
   if (!author) return undefined;
   if (typeof author === "string") return author;
+  if (typeof author !== "object") return undefined;
   const parts: string[] = [];
-  if (author.name) parts.push(author.name);
-  if (author.email) parts.push(`<${author.email}>`);
-  if (author.url) parts.push(`(${author.url})`);
+  if (typeof author.name === "string" && author.name) parts.push(author.name);
+  if (typeof author.email === "string" && author.email) parts.push(`<${author.email}>`);
+  if (typeof author.url === "string" && author.url) parts.push(`(${author.url})`);
   return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+export function formatEngines(engines: NpmPackageVersion["engines"]): string | undefined {
+  if (!engines) return undefined;
+  if (typeof engines === "string") return engines;
+  if (Array.isArray(engines)) {
+    const items = engines.filter((e): e is string => typeof e === "string" && e !== "");
+    return items.length > 0 ? items.join(", ") : undefined;
+  }
+  if (typeof engines !== "object") return undefined;
+  const parts = Object.entries(engines)
+    .filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")
+    .map(([k, v]) => `${k}: ${v}`);
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+export function formatKeywords(
+  keywords: string[] | string | undefined
+): string | undefined {
+  if (typeof keywords === "string") return keywords || undefined;
+  if (!Array.isArray(keywords) || keywords.length === 0) return undefined;
+  const items = keywords.filter((k): k is string => typeof k === "string" && k !== "");
+  return items.length > 0 ? items.join(", ") : undefined;
+}
+
+export function formatMaintainer(
+  m: { name?: string; email?: string } | string | null | undefined
+): string {
+  if (typeof m === "string") return m;
+  if (!m || typeof m !== "object") return "unknown";
+  const name = typeof m.name === "string" && m.name ? m.name : "unknown";
+  const email = typeof m.email === "string" && m.email ? ` <${m.email}>` : "";
+  return `${name}${email}`;
 }
 
 export function registerPackageInfoTool(server: McpServer): void {
@@ -63,19 +145,35 @@ Examples:
     async ({ package_name }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
-        const latestTag = metadata["dist-tags"]?.latest;
+        const distTags = recordOf<string>(metadata["dist-tags"]);
+        const latestTagRaw = distTags?.latest;
+        const latestTag = typeof latestTagRaw === "string" ? latestTagRaw : undefined;
+        const versions = recordOf<NpmPackageVersion>(metadata.versions);
+        const latestCandidate = latestTag ? versions?.[latestTag] : undefined;
         const latestVersion =
-          latestTag && metadata.versions?.[latestTag]
-            ? metadata.versions[latestTag]
+          latestCandidate && typeof latestCandidate === "object"
+            ? latestCandidate
             : undefined;
 
-        const lines: string[] = [`# ${metadata.name}`];
-        if (metadata.description) lines.push("", metadata.description);
+        const name =
+          typeof metadata.name === "string" && metadata.name
+            ? metadata.name
+            : package_name;
+        const lines: string[] = [`# ${name}`];
+        if (typeof metadata.description === "string" && metadata.description)
+          lines.push("", metadata.description);
         lines.push("");
 
         if (latestTag) lines.push(`**Latest Version:** ${latestTag}`);
-        if (metadata.license) lines.push(`**License:** ${metadata.license}`);
-        if (metadata.homepage) lines.push(`**Homepage:** ${metadata.homepage}`);
+
+        const license = formatLicense(
+          latestVersion?.license ?? metadata.license,
+          latestVersion?.licenses ?? metadata.licenses
+        );
+        if (license) lines.push(`**License:** ${license}`);
+
+        if (typeof metadata.homepage === "string" && metadata.homepage)
+          lines.push(`**Homepage:** ${metadata.homepage}`);
 
         const repoUrl = formatRepository(metadata.repository);
         if (repoUrl) lines.push(`**Repository:** ${repoUrl}`);
@@ -83,38 +181,34 @@ Examples:
         const authorStr = formatAuthor(latestVersion?.author);
         if (authorStr) lines.push(`**Author:** ${authorStr}`);
 
-        if (latestVersion?.engines) {
-          const engineParts = Object.entries(latestVersion.engines).map(
-            ([k, v]) => `${k}: ${v}`
-          );
-          lines.push(`**Engines:** ${engineParts.join(", ")}`);
-        }
+        const engines = formatEngines(latestVersion?.engines);
+        if (engines) lines.push(`**Engines:** ${engines}`);
 
-        if (metadata.keywords?.length) {
-          lines.push(`**Keywords:** ${metadata.keywords.join(", ")}`);
-        }
+        const keywords = formatKeywords(metadata.keywords);
+        if (keywords) lines.push(`**Keywords:** ${keywords}`);
 
-        if (metadata["dist-tags"]) {
-          const tags = Object.entries(metadata["dist-tags"])
+        if (distTags) {
+          const tags = Object.entries(distTags)
+            .filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")
             .map(([tag, ver]) => `${tag}: ${ver}`)
             .join(", ");
-          lines.push(`**Dist-tags:** ${tags}`);
+          if (tags) lines.push(`**Dist-tags:** ${tags}`);
         }
 
-        const publishDate = metadata.time?.[latestTag ?? ""];
-        if (publishDate) {
+        const publishDate = latestTag ? metadata.time?.[latestTag] : undefined;
+        if (typeof publishDate === "string" && publishDate) {
           lines.push(`**Last Published:** ${publishDate}`);
         }
         const createdDate = metadata.time?.created;
-        if (createdDate) {
+        if (typeof createdDate === "string" && createdDate) {
           lines.push(`**Created:** ${createdDate}`);
         }
 
-        if (metadata.maintainers?.length) {
+        if (Array.isArray(metadata.maintainers) && metadata.maintainers.length) {
           lines.push("");
           lines.push("**Maintainers:**");
           for (const m of metadata.maintainers.slice(0, 10)) {
-            lines.push(`- ${m.name}${m.email ? ` <${m.email}>` : ""}`);
+            lines.push(`- ${formatMaintainer(m)}`);
           }
           if (metadata.maintainers.length > 10) {
             lines.push(`- ... and ${metadata.maintainers.length - 10} more`);
@@ -122,20 +216,37 @@ Examples:
         }
 
         if (latestVersion) {
-          const depCount = Object.keys(latestVersion.dependencies ?? {}).length;
-          const peerCount = Object.keys(latestVersion.peerDependencies ?? {}).length;
+          const depCount = Object.keys(
+            typeof latestVersion.dependencies === "object" &&
+              latestVersion.dependencies !== null &&
+              !Array.isArray(latestVersion.dependencies)
+              ? latestVersion.dependencies
+              : {}
+          ).length;
+          const peerCount = Object.keys(
+            typeof latestVersion.peerDependencies === "object" &&
+              latestVersion.peerDependencies !== null &&
+              !Array.isArray(latestVersion.peerDependencies)
+              ? latestVersion.peerDependencies
+              : {}
+          ).length;
           lines.push("");
           lines.push(
             `**Dependencies:** ${depCount} direct${peerCount > 0 ? `, ${peerCount} peer` : ""}`
           );
 
-          if (latestVersion.types || latestVersion.typings) {
-            lines.push(
-              `**TypeScript:** Bundled types (${latestVersion.types ?? latestVersion.typings})`
-            );
+          const detection = detectTypesEntry(latestVersion);
+          if (detection.source !== "none") {
+            const sourceLabel =
+              detection.source === "types" || detection.source === "typings"
+                ? (detection.entry ?? `${detection.source} field`)
+                : detection.source === "exports"
+                  ? (detection.entry ?? "exports map")
+                  : "typesVersions map";
+            lines.push(`**TypeScript:** Bundled types (${sourceLabel})`);
           }
 
-          if (latestVersion.deprecated) {
+          if (typeof latestVersion.deprecated === "string") {
             lines.push("");
             lines.push(`> **DEPRECATED:** ${latestVersion.deprecated}`);
           }

@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
 
       - name: Validate
-        run: npm run clean && npm run build && npm run lint:strict && npm run format:check
+        run: npm run clean && npm run build && npm run lint:strict && npm run format:check && npm test
 
       - name: Configure git
         run: |

@@ -8,15 +8,25 @@ import {
 import { CHARACTER_LIMIT } from "../constants.js";
 import { errorResult, textResult, truncateSafely } from "./shared.js";
 
-/** Sentinel the npm registry stores when a package has no README. */
 const NPM_MISSING_README = "ERROR: No README data found!";
 
 const ReadmeInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
 };
+
+export function isMissingReadme(content: unknown): boolean {
+  return (
+    typeof content !== "string" || content.length === 0 || content === NPM_MISSING_README
+  );
+}
+
+function hasReadme(content: unknown): content is string {
+  return !isMissingReadme(content);
+}
 
 export function registerReadmeTool(server: McpServer): void {
   server.registerTool(
@@ -51,13 +61,14 @@ Examples:
         let readmeContent = metadata.readme;
         let source = "npm";
 
-        if (!readmeContent || readmeContent === NPM_MISSING_README) {
+        if (!hasReadme(readmeContent)) {
           const ghRepo = extractGitHubRepo(metadata.repository);
           if (ghRepo) {
             const ghReadme = await fetchGitHubReadme(
               ghRepo.owner,
               ghRepo.repo,
-              ghRepo.directory
+              ghRepo.directory,
+              ghRepo.ref
             );
             if (ghReadme) {
               readmeContent = ghReadme;
@@ -66,7 +77,7 @@ Examples:
           }
         }
 
-        if (!readmeContent || readmeContent === NPM_MISSING_README) {
+        if (!hasReadme(readmeContent)) {
           return textResult(
             `No README found for "${package_name}". Check the package's repository or homepage for documentation.`
           );

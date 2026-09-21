@@ -1,77 +1,77 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchPackageVersion, fetchAbbreviatedPackument } from "../services/npm-api.js";
+import { fetchAbbreviatedPackument, fetchResolvedVersion } from "../services/npm-api.js";
 import { createLimiter } from "../services/concurrency.js";
+import { PACKAGE_NAME_REGEX } from "../constants.js";
 import { maxSatisfying } from "../services/semver.js";
 import type { AbbreviatedPackument, NpmPackageVersion } from "../types.js";
-import { errorMessage, errorResult, textResult } from "./shared.js";
+import { errorMessage, errorResult, recordOf, textResult } from "./shared.js";
 
 const DependenciesInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
   version: z
     .string()
     .optional()
     .describe(
-      "Specific version to check (default: latest). Use npm_package_versions to find available versions."
+      "Version, dist-tag, or semver range to check (default: latest). Use npm_package_versions to find available versions."
     ),
   depth: z
     .number()
     .int()
     .min(1)
     .max(5)
-    .optional()
+    .default(1)
     .describe(
       "Resolve transitive production dependencies up to this depth (1-5, default: 1). Higher depths fetch more packages and take longer."
     ),
   include_dev: z
     .boolean()
-    .optional()
+    .default(true)
     .describe("Include devDependencies (default: true). Ignored when depth > 1."),
   include_peer: z
     .boolean()
-    .optional()
+    .default(true)
     .describe("Include peerDependencies (default: true). Ignored when depth > 1."),
   include_optional: z
     .boolean()
-    .optional()
+    .default(true)
     .describe("Include optionalDependencies (default: true). Ignored when depth > 1."),
 };
 
-function formatDeps(deps: Record<string, string> | undefined, label: string): string[] {
+export function formatDeps(
+  deps: Record<string, string> | undefined,
+  label: string,
+  optionalDeps?: ReadonlySet<string>
+): string[] {
   if (!deps || Object.keys(deps).length === 0) return [];
   const entries = Object.entries(deps).sort(([a], [b]) => a.localeCompare(b));
   const lines: string[] = [`### ${label} (${entries.length})`, ""];
   for (const [name, version] of entries) {
-    lines.push(`- ${name}: ${version}`);
+    lines.push(`- ${name}: ${version}${optionalDeps?.has(name) ? " (optional)" : ""}`);
   }
   lines.push("");
   return lines;
 }
 
+function depsRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, spec] of Object.entries(value)) {
+    if (typeof spec === "string") out[key] = spec;
+  }
+  return out;
+}
+
 interface TreeNode {
   version: string;
   dependencies: Record<string, string>;
+  optionalDeps?: ReadonlySet<string>;
 }
 
-/**
- * Translate a package.json dependency entry into the (real package name,
- * version hint) pair we should fetch from the registry.
- *
- * Standard entry: `"foo": "^1.0.0"` → `{ name: "foo", hint: "^1.0.0" }`.
- *
- * npm alias spec: `"foo": "npm:bar@^1.0.0"` (foo installed from package bar)
- * → `{ name: "bar", hint: "^1.0.0" }`. Scoped aliases work too:
- * `"foo": "npm:@scope/bar@1.0.0"` → `{ name: "@scope/bar", hint: "1.0.0" }`.
- *
- * Non-registry specs (git, file:, link:, http(s):, github: shorthand) can't
- * be resolved through the npm registry — return null so the caller can
- * record a clear warning instead of attempting a doomed packument fetch.
- *
- * Exported for tests.
- */
 export function resolveDependencySpec(
   alias: string,
   raw: string
@@ -79,19 +79,19 @@ export function resolveDependencySpec(
   const trimmed = raw.trim();
 
   if (trimmed.startsWith("npm:")) {
-    const spec = trimmed.slice(4);
+    const spec = trimmed.slice(4).trim();
     const isScoped = spec.startsWith("@");
     const at = isScoped ? spec.indexOf("@", 1) : spec.indexOf("@");
-    if (at > 0) {
-      return { name: spec.slice(0, at), hint: spec.slice(at + 1) || "latest" };
-    }
-    return { name: spec, hint: "latest" };
+    const name = at > 0 ? spec.slice(0, at) : spec;
+    if (!PACKAGE_NAME_REGEX.test(name)) return null;
+    return { name, hint: at > 0 ? spec.slice(at + 1) || "latest" : "latest" };
   }
 
-  // Specs that can't be resolved against the registry.
   if (
-    /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|github:)/i.test(trimmed) ||
-    /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed) // bare GitHub shorthand "owner/repo"
+    /^(?:git\+|git:|ssh:|https?:|file:|link:|workspace:|catalog:|jsr:|portal:|patch:|github:|gitlab:|bitbucket:|gist:)/i.test(
+      trimmed
+    ) ||
+    /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(trimmed)
   ) {
     return null;
   }
@@ -99,40 +99,64 @@ export function resolveDependencySpec(
   return { name: alias, hint: trimmed };
 }
 
-interface ResolveResult {
+export interface ResolveResult {
   rootKey: string;
   tree: Record<string, TreeNode>;
-  /** Maps "name@versionHint" (the range as written in package.json) to the
-   *  resolved tree key "name@resolvedVersion". Used to walk child edges
-   *  without re-running semver resolution. */
   hintToKey: Map<string, string>;
   warnings: string[];
+  truncated: boolean;
+  truncatedBy?: "packages" | "time";
 }
 
-/**
- * Resolve a production-dependency tree by fetching abbreviated packuments
- * with bounded concurrency. Each package is fetched at most once (cached by
- * name) and each `name@versionHint` pair is queued at most once. Final
- * deduplication is keyed on the resolved version, so multiple ranges that
- * resolve to the same version produce a single tree node.
- */
-async function resolveProductionTree(
+export interface TreeBudget {
+  maxPackages: number;
+  timeLimitMs: number;
+}
+
+export const DEFAULT_TREE_BUDGET: TreeBudget = {
+  maxPackages: 200,
+  timeLimitMs: 20_000,
+};
+
+export async function resolveProductionTree(
   rootName: string,
   rootHint: string,
-  maxDepth: number
+  maxDepth: number,
+  budget: TreeBudget = DEFAULT_TREE_BUDGET
 ): Promise<ResolveResult> {
   const runLimited = createLimiter(8);
-  const packumentCache = new Map<string, AbbreviatedPackument>();
-  // Tracks the shallowest depth at which each `name@versionHint` was visited.
-  // Skipping by hint alone (a Set) is racy under concurrent fetches: if the
-  // same hint is first processed on a deeper branch (no children expanded
-  // because we hit the depth limit) and later seen at a shallower depth, the
-  // shallower visit must run so its children get explored.
+  const packuments = new Map<string, Promise<AbbreviatedPackument>>();
   const visitedAtDepth = new Map<string, number>();
   const tree: Record<string, TreeNode> = {};
   const hintToKey = new Map<string, string>();
   const warnings: string[] = [];
+  const seenWarnings = new Set<string>();
+  let truncatedBy: "packages" | "time" | undefined;
   let rootResolvedKey: string | null = null;
+  const deadline = Date.now() + budget.timeLimitMs;
+
+  const warn = (message: string): void => {
+    if (!seenWarnings.has(message)) {
+      seenWarnings.add(message);
+      warnings.push(message);
+    }
+  };
+
+  const budgetExhausted = Symbol("budget");
+  const getPackument = (name: string): Promise<AbbreviatedPackument> => {
+    let pending = packuments.get(name);
+    if (!pending) {
+      pending = runLimited(() => {
+        if (Date.now() > deadline) {
+          truncatedBy ??= "time";
+          return Promise.reject(budgetExhausted);
+        }
+        return fetchAbbreviatedPackument(name, deadline);
+      });
+      packuments.set(name, pending);
+    }
+    return pending;
+  };
 
   async function visit(
     name: string,
@@ -146,36 +170,41 @@ async function resolveProductionTree(
     if (prevDepth !== undefined && prevDepth <= currentDepth) return;
     visitedAtDepth.set(hintKey, currentDepth);
 
-    let pkg = packumentCache.get(name);
-    if (!pkg) {
-      try {
-        pkg = await runLimited(() => fetchAbbreviatedPackument(name));
-        packumentCache.set(name, pkg);
-      } catch (err) {
-        warnings.push(`Failed to fetch ${name}: ${errorMessage(err)}`);
-        if (!tree[hintKey]) {
-          tree[hintKey] = { version: versionHint, dependencies: {} };
-        }
-        hintToKey.set(hintKey, hintKey);
-        if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
-        return;
-      }
+    if (!packuments.has(name)) {
+      if (truncatedBy) return;
+      if (packuments.size >= budget.maxPackages) truncatedBy = "packages";
+      else if (Date.now() > deadline) truncatedBy = "time";
+      if (truncatedBy) return;
     }
 
+    let pkg: AbbreviatedPackument;
+    try {
+      pkg = await getPackument(name);
+    } catch (err) {
+      if (err === budgetExhausted) return;
+      if (Date.now() > deadline) {
+        truncatedBy ??= "time";
+        return;
+      }
+      warn(`Failed to fetch ${name}: ${errorMessage(err)}`);
+      if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
+      return;
+    }
+
+    const versions = recordOf<NpmPackageVersion>(pkg.versions) ?? {};
+    const distTags = recordOf<string>(pkg["dist-tags"]);
+    const tagged = distTags?.[versionHint];
     let resolvedVersion: string | null;
-    if (pkg.versions[versionHint]) {
+    if (versions[versionHint]) {
       resolvedVersion = versionHint;
-    } else if (pkg["dist-tags"]?.[versionHint]) {
-      resolvedVersion = pkg["dist-tags"][versionHint];
+    } else if (typeof tagged === "string" && tagged) {
+      resolvedVersion = tagged;
     } else {
-      // No fallback to dist-tags.latest: if no published version satisfies
-      // the range, npm would refuse to install it. Surface that as a
-      // warning rather than silently expanding an unrelated version's deps.
-      resolvedVersion = maxSatisfying(Object.keys(pkg.versions), versionHint);
+      resolvedVersion = maxSatisfying(Object.keys(versions), versionHint);
     }
 
     if (!resolvedVersion) {
-      warnings.push(`No published version of ${name} satisfies '${versionHint}'.`);
+      warn(`No published version of ${name} satisfies '${versionHint}'.`);
       if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
       return;
     }
@@ -184,18 +213,24 @@ async function resolveProductionTree(
     hintToKey.set(hintKey, resolvedKey);
     if (isRoot && !rootResolvedKey) rootResolvedKey = resolvedKey;
 
-    const versionData = pkg.versions[resolvedVersion] as NpmPackageVersion | undefined;
-    const deps = versionData?.dependencies ?? {};
+    const versionData = versions[resolvedVersion] as NpmPackageVersion | undefined;
+    const deps = depsRecord(versionData?.dependencies);
+    const optDeps = depsRecord(versionData?.optionalDependencies);
+    const mergedDeps = { ...deps, ...optDeps };
     if (!tree[resolvedKey]) {
-      tree[resolvedKey] = { version: resolvedVersion, dependencies: deps };
+      tree[resolvedKey] = {
+        version: resolvedVersion,
+        dependencies: mergedDeps,
+        optionalDeps: new Set(Object.keys(optDeps)),
+      };
     }
 
     if (currentDepth < maxDepth) {
       await Promise.all(
-        Object.entries(deps).map(([alias, raw]) => {
+        Object.entries(mergedDeps).map(([alias, raw]) => {
           const spec = resolveDependencySpec(alias, raw);
           if (!spec) {
-            warnings.push(`Skipped non-registry dependency '${alias}': ${raw}`);
+            warn(`Skipped non-registry dependency '${alias}': ${raw}`);
             return Promise.resolve();
           }
           return visit(spec.name, spec.hint, currentDepth + 1, false);
@@ -211,10 +246,12 @@ async function resolveProductionTree(
     tree,
     hintToKey,
     warnings,
+    truncated: truncatedBy !== undefined,
+    truncatedBy,
   };
 }
 
-function formatTree(result: ResolveResult, maxDepth: number): string[] {
+export function formatTree(result: ResolveResult, maxDepth: number): string[] {
   const lines: string[] = [];
   const totalNodes = Object.keys(result.tree).length;
   const totalEdges = Object.values(result.tree).reduce(
@@ -226,22 +263,40 @@ function formatTree(result: ResolveResult, maxDepth: number): string[] {
     `**Resolved tree:** ${totalNodes} unique package${totalNodes === 1 ? "" : "s"} ` +
       `(depth ${maxDepth}, ${totalEdges} edge${totalEdges === 1 ? "" : "s"})`
   );
+  if (result.truncated) {
+    const why =
+      result.truncatedBy === "packages"
+        ? `package fetch limit reached`
+        : `time budget reached`;
+    lines.push(
+      `> **Note:** tree is partial — ${why}. Re-run with a smaller \`depth\` for a complete picture.`
+    );
+  }
   lines.push("");
 
   const rootEntry = result.tree[result.rootKey];
   if (!rootEntry) {
     lines.push(`Root: ${result.rootKey} (not resolved)`);
+    lines.push("");
+    lines.push(...formatWarnings(result.warnings));
     return lines;
   }
 
   lines.push("```");
   const visited = new Set<string>();
 
-  const walk = (key: string, prefix: string, isLast: boolean, depth: number): void => {
+  const walk = (
+    key: string,
+    prefix: string,
+    isLast: boolean,
+    depth: number,
+    optional: boolean
+  ): void => {
     const node = result.tree[key];
     const connector = depth === 0 ? "" : isLast ? "└── " : "├── ";
     const cycleMarker = visited.has(key) ? " (already shown)" : "";
-    lines.push(`${prefix}${connector}${key}${cycleMarker}`);
+    const optionalMarker = optional ? " (optional)" : "";
+    lines.push(`${prefix}${connector}${key}${optionalMarker}${cycleMarker}`);
     if (visited.has(key) || !node) return;
     visited.add(key);
 
@@ -249,37 +304,47 @@ function formatTree(result: ResolveResult, maxDepth: number): string[] {
     const nextPrefix = depth === 0 ? "" : prefix + (isLast ? "    " : "│   ");
     deps.forEach(([depName, depRange], idx) => {
       const isLastChild = idx === deps.length - 1;
+      const depOptional = node.optionalDeps?.has(depName) ?? false;
+      const depMarker = depOptional ? " (optional)" : "";
       const spec = resolveDependencySpec(depName, depRange);
       if (!spec) {
         lines.push(
-          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange} (non-registry)`
+          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange}${depMarker} (non-registry)`
         );
         return;
       }
       const childKey = result.hintToKey.get(`${spec.name}@${spec.hint}`);
       if (childKey && result.tree[childKey]) {
-        walk(childKey, nextPrefix, isLastChild, depth + 1);
+        walk(childKey, nextPrefix, isLastChild, depth + 1, depOptional);
       } else {
         const label =
           spec.name === depName
             ? `${depName}@${depRange}`
             : `${depName} → npm:${spec.name}@${spec.hint}`;
-        const reason = depth + 1 > maxDepth ? "depth limit" : "not resolved";
-        lines.push(`${nextPrefix}${isLastChild ? "└── " : "├── "}${label} (${reason})`);
+        const reason =
+          depth + 1 > maxDepth
+            ? "depth limit"
+            : result.truncated
+              ? "truncated"
+              : "not resolved";
+        lines.push(
+          `${nextPrefix}${isLastChild ? "└── " : "├── "}${label}${depMarker} (${reason})`
+        );
       }
     });
   };
 
-  walk(result.rootKey, "", true, 0);
+  walk(result.rootKey, "", true, 0, false);
   lines.push("```");
   lines.push("");
 
-  if (result.warnings.length > 0) {
-    lines.push(`### Warnings (${result.warnings.length})`, "");
-    for (const w of result.warnings) lines.push(`- ${w}`);
-    lines.push("");
-  }
+  lines.push(...formatWarnings(result.warnings));
   return lines;
+}
+
+function formatWarnings(warnings: string[]): string[] {
+  if (warnings.length === 0) return [];
+  return [`### Warnings (${warnings.length})`, "", ...warnings.map((w) => `- ${w}`), ""];
 }
 
 export function registerDependenciesTool(server: McpServer): void {
@@ -292,12 +357,13 @@ export function registerDependenciesTool(server: McpServer): void {
 By default returns direct dependencies of all kinds (dependencies, devDependencies,
 peerDependencies, optionalDependencies) along with totals. When \`depth\` is
 greater than 1, resolves the transitive production dependency tree (using the
-abbreviated packument format and a bounded fetch limiter) and renders it as an
-ASCII tree with deduplicated nodes.
+abbreviated packument format and a bounded fetch limiter; optionalDependencies
+are included and marked "(optional)") and renders it as an ASCII tree with
+deduplicated nodes.
 
 Args:
   - package_name (string): The npm package name
-  - version (string, optional): Specific version to check (defaults to latest)
+  - version (string, optional): Version, dist-tag, or semver range (defaults to latest)
   - depth (number, optional, 1-5): Transitive production-dep depth (default 1)
   - include_dev (boolean, optional): Include devDependencies (default true; ignored when depth > 1)
   - include_peer (boolean, optional): Include peerDependencies (default true; ignored when depth > 1)
@@ -329,15 +395,17 @@ Examples:
       include_optional,
     }) => {
       try {
-        const versionData = await fetchPackageVersion(
-          package_name,
-          version?.trim() || "latest"
-        );
+        const versionData = await fetchResolvedVersion(package_name, version);
 
-        const runtimeDeps = versionData.dependencies ?? {};
-        const devDeps = versionData.devDependencies ?? {};
-        const peerDeps = versionData.peerDependencies ?? {};
-        const optDeps = versionData.optionalDependencies ?? {};
+        const runtimeDeps = depsRecord(versionData.dependencies);
+        const devDeps = depsRecord(versionData.devDependencies);
+        const peerDeps = depsRecord(versionData.peerDependencies);
+        const optDeps = depsRecord(versionData.optionalDependencies);
+        const optionalPeers = new Set(
+          Object.entries(versionData.peerDependenciesMeta ?? {})
+            .filter(([, meta]) => meta?.optional === true)
+            .map(([name]) => name)
+        );
 
         const counts = {
           runtime: Object.keys(runtimeDeps).length,
@@ -353,7 +421,7 @@ Examples:
           "",
         ];
 
-        const resolvedDepth = depth ?? 1;
+        const resolvedDepth = depth;
         const wantDev = include_dev !== false;
         const wantPeer = include_peer !== false;
         const wantOptional = include_optional !== false;
@@ -362,7 +430,7 @@ Examples:
           const sections: string[] = [
             ...formatDeps(runtimeDeps, "Dependencies"),
             ...(wantDev ? formatDeps(devDeps, "Dev Dependencies") : []),
-            ...(wantPeer ? formatDeps(peerDeps, "Peer Dependencies") : []),
+            ...(wantPeer ? formatDeps(peerDeps, "Peer Dependencies", optionalPeers) : []),
             ...(wantOptional ? formatDeps(optDeps, "Optional Dependencies") : []),
           ];
 
@@ -376,8 +444,6 @@ Examples:
             lines.push(...sections);
           }
         } else {
-          // Transitive resolution: only production deps (matches npm install
-          // semantics — devDeps/peerDeps are not transitively resolved).
           lines.push(...formatDeps(runtimeDeps, "Direct Dependencies"));
           const tree = await resolveProductionTree(
             package_name,

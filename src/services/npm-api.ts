@@ -1,17 +1,22 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   NPM_REGISTRY_URL,
   NPMS_API_URL,
+  NPM_DOWNLOADS_API_URL,
   GITHUB_API_URL,
+  GITHUB_RAW_URL,
   USER_AGENT,
   DEFAULT_REQUEST_TIMEOUT,
   TYPES_CHECK_TIMEOUT,
   MAX_PACKAGE_NAME_LENGTH,
   PACKAGE_NAME_REGEX,
 } from "../constants.js";
+import { maxSatisfying } from "./semver.js";
 import type {
   NpmRegistryResponse,
   NpmSearchResult,
   NpmPackageVersion,
+  NpmDownloadsResponse,
   NpmsPackageResponse,
   AbbreviatedPackument,
 } from "../types.js";
@@ -35,53 +40,130 @@ function encodePackageName(name: string): string {
     : encodeURIComponent(name);
 }
 
-/**
- * Map a package name to its DefinitelyTyped companion package name:
- * `react` → `@types/react`, `@babel/core` → `@types/babel__core`.
- */
 export function typesPackageName(packageName: string): string {
   return packageName.startsWith("@")
     ? `@types/${packageName.slice(1).replace("/", "__")}`
     : `@types/${packageName}`;
 }
 
-async function fetchWithTimeout(
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
+const RETRYABLE_STATUSES = new Set([429, 503]);
+const MAX_RETRY_WAIT_MS = 10_000;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function timeoutError(timeout: number, cause?: unknown): Error {
+  return new Error(
+    `Request timed out after ${Math.max(timeout, 0)}ms. The remote service may be slow or unreachable — try again later.`,
+    cause === undefined ? undefined : { cause }
+  );
+}
+
+async function fetchOnce<T>(
   url: string,
-  timeout: number = DEFAULT_REQUEST_TIMEOUT,
-  headers: Record<string, string> = { Accept: "application/json" }
-): Promise<Response> {
+  timeout: number,
+  headers: Record<string, string>,
+  consume: (response: Response) => Promise<T>
+): Promise<T> {
+  if (timeout <= 0) throw timeoutError(timeout);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    return await fetch(url, { signal: controller.signal, headers });
+    const response = await fetch(url, { signal: controller.signal, headers });
+    return await consume(response);
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(
-        `Request timed out after ${timeout}ms. The registry may be slow or unreachable — try again later.`,
-        { cause: error }
-      );
-    }
+    if (isAbortError(error)) throw timeoutError(timeout, error);
     throw error;
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * Fetch a JSON endpoint, translating non-2xx responses into descriptive
- * errors via `describeFailure`.
- */
+function retryDelayMs(retryAfter: string | null): number {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+    }
+    const dateMs = Date.parse(retryAfter);
+    if (!Number.isNaN(dateMs)) {
+      return Math.min(Math.max(dateMs - Date.now(), 0), MAX_RETRY_WAIT_MS);
+    }
+  }
+  return 1000;
+}
+
+function timeoutWithin(timeout: number, deadline: number | undefined): number {
+  return deadline === undefined ? timeout : Math.min(timeout, deadline - Date.now());
+}
+
+async function fetchWithTimeout<T>(
+  url: string,
+  consume: (response: Response) => Promise<T>,
+  timeout: number = DEFAULT_REQUEST_TIMEOUT,
+  headers: Record<string, string> = {},
+  deadline?: number
+): Promise<T> {
+  const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
+  type Attempt = { done: true; value: T } | { done: false; retryAfter: string | null };
+  const first = await fetchOnce(
+    url,
+    timeoutWithin(timeout, deadline),
+    merged,
+    async (response): Promise<Attempt> => {
+      if (!RETRYABLE_STATUSES.has(response.status)) {
+        return { done: true, value: await consume(response) };
+      }
+      const waitMs = retryDelayMs(response.headers.get("retry-after"));
+      if (deadline !== undefined && Date.now() + waitMs >= deadline) {
+        return { done: true, value: await consume(response) };
+      }
+      await response.body?.cancel().catch(() => undefined);
+      return { done: false, retryAfter: response.headers.get("retry-after") };
+    }
+  );
+  if (first.done) return first.value;
+
+  await delay(retryDelayMs(first.retryAfter));
+  return fetchOnce(url, timeoutWithin(timeout, deadline), merged, consume);
+}
+
 async function fetchJson<T>(
   url: string,
   describeFailure: (status: number) => string,
   timeout?: number,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  deadline?: number
 ): Promise<T> {
-  const response = await fetchWithTimeout(url, timeout, headers);
-  if (!response.ok) {
-    throw new Error(describeFailure(response.status));
-  }
-  return (await response.json()) as T;
+  return fetchWithTimeout(
+    url,
+    async (response) => {
+      if (!response.ok) {
+        throw new HttpError(describeFailure(response.status), response.status);
+      }
+      try {
+        return (await response.json()) as T;
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new Error(`Invalid JSON in the response from ${new URL(url).hostname}.`, {
+          cause: error,
+        });
+      }
+    },
+    timeout,
+    headers,
+    deadline
+  );
 }
 
 export async function fetchPackageMetadata(
@@ -97,7 +179,8 @@ export async function fetchPackageMetadata(
 }
 
 export async function fetchAbbreviatedPackument(
-  packageName: string
+  packageName: string,
+  deadline?: number
 ): Promise<AbbreviatedPackument> {
   validatePackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(packageName)}`;
@@ -108,7 +191,8 @@ export async function fetchAbbreviatedPackument(
         ? `Package "${packageName}" not found on npm. Check the package name is correct.`
         : `npm registry returned status ${status} for "${packageName}".`,
     DEFAULT_REQUEST_TIMEOUT,
-    { Accept: "application/vnd.npm.install-v1+json" }
+    { Accept: "application/vnd.npm.install-v1+json" },
+    deadline
   );
 }
 
@@ -123,6 +207,41 @@ export async function fetchPackageVersion(
       ? `Version "${version}" of package "${packageName}" not found. Use npm_package_versions to see available versions.`
       : `npm registry returned status ${status} for "${packageName}@${version}".`
   );
+}
+
+export async function fetchResolvedVersion(
+  packageName: string,
+  version?: string
+): Promise<NpmPackageVersion> {
+  const requested = version?.trim() || "latest";
+  try {
+    return await fetchPackageVersion(packageName, requested);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status >= 500) throw error;
+
+    const packument = await fetchAbbreviatedPackument(packageName);
+    const distTags = packument["dist-tags"];
+    const tagged =
+      distTags && typeof distTags === "object" && !Array.isArray(distTags)
+        ? distTags[requested]
+        : undefined;
+    const versions = packument.versions;
+    const versionKeys =
+      versions && typeof versions === "object" && !Array.isArray(versions)
+        ? Object.keys(versions)
+        : [];
+    const resolved =
+      typeof tagged === "string" && tagged
+        ? tagged
+        : maxSatisfying(versionKeys, requested);
+    if (!resolved) {
+      throw new Error(
+        `No published version of "${packageName}" satisfies "${requested}". Use npm_package_versions to see available versions.`,
+        { cause: error }
+      );
+    }
+    return fetchPackageVersion(packageName, resolved);
+  }
 }
 
 export async function searchPackages(
@@ -147,69 +266,156 @@ export async function fetchNpmsScore(packageName: string): Promise<NpmsPackageRe
   );
 }
 
+export interface DefinitelyTypedResult {
+  exists: boolean;
+  version?: string;
+  deprecated?: string;
+}
+
 export async function checkDefinitelyTyped(
   packageName: string
-): Promise<{ exists: boolean; version?: string }> {
+): Promise<DefinitelyTypedResult> {
+  validatePackageName(packageName);
   const typesName = typesPackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(typesName)}/latest`;
-  const response = await fetchWithTimeout(url, TYPES_CHECK_TIMEOUT);
-  if (response.ok) {
-    const data = (await response.json()) as NpmPackageVersion;
-    return { exists: true, version: data.version };
-  }
-  if (response.status === 404) {
-    return { exists: false };
-  }
-  throw new Error(
-    `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
+  return fetchWithTimeout(
+    url,
+    async (response) => {
+      if (response.ok) {
+        const data = (await response.json()) as NpmPackageVersion;
+        return {
+          exists: true,
+          version: data.version,
+          deprecated: typeof data.deprecated === "string" ? data.deprecated : undefined,
+        };
+      }
+      if (response.status === 404) {
+        return { exists: false };
+      }
+      throw new Error(
+        `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
+      );
+    },
+    TYPES_CHECK_TIMEOUT
   );
+}
+
+export async function fetchNpmDownloads(
+  packageName: string
+): Promise<{ lastWeek?: NpmDownloadsResponse; lastMonth?: NpmDownloadsResponse }> {
+  validatePackageName(packageName);
+  const encoded = encodePackageName(packageName);
+  const [lastWeek, lastMonth] = await Promise.all([
+    fetchJson<NpmDownloadsResponse>(
+      `${NPM_DOWNLOADS_API_URL}/point/last-week/${encoded}`,
+      (status) => `npm downloads API returned status ${status} for "${packageName}".`
+    ).catch(() => undefined),
+    fetchJson<NpmDownloadsResponse>(
+      `${NPM_DOWNLOADS_API_URL}/point/last-month/${encoded}`,
+      (status) => `npm downloads API returned status ${status} for "${packageName}".`
+    ).catch(() => undefined),
+  ]);
+  return { lastWeek, lastMonth };
+}
+
+export interface GitHubRepoRef {
+  owner: string;
+  repo: string;
+  directory?: string;
+  ref?: string;
 }
 
 export function extractGitHubRepo(
   repository: NpmRegistryResponse["repository"]
-): { owner: string; repo: string; directory?: string } | null {
+): GitHubRepoRef | null {
   if (!repository) return null;
 
   const repoObj = typeof repository === "string" ? null : repository;
   const url = typeof repository === "string" ? repository : repository.url;
-  if (!url) return null;
+  if (typeof url !== "string" || !url) return null;
 
-  // Handle github:owner/repo shorthand notation
   const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
   const match =
     shorthandMatch ??
     url.match(
-      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?(?:#.*)?$/
-    );
+      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([^/?#\s]+)(\/[^?#\s]*)?)?\/?(?:[#?].*)?$/
+    ) ??
+    url.match(/^([\w.-]+)\/([\w.-]+)$/);
   if (!match) return null;
 
-  const result: { owner: string; repo: string; directory?: string } = {
-    owner: match[1],
-    repo: match[2],
-  };
-  if (repoObj?.directory) {
-    result.directory = repoObj.directory;
+  const result: GitHubRepoRef = { owner: match[1], repo: match[2] };
+  if (match === shorthandMatch || match[3] === undefined) {
+    const directory = repoObj?.directory ?? repoObj?.path;
+    return withDirectory(result, directory);
+  }
+  if (match[3] !== "HEAD") result.ref = match[3];
+  const directory = repoObj?.directory ?? repoObj?.path ?? match[4]?.slice(1);
+  return withDirectory(result, directory);
+}
+
+function withDirectory(result: GitHubRepoRef, directory: unknown): GitHubRepoRef {
+  if (typeof directory === "string" && directory) {
+    const cleaned = directory
+      .split("/")
+      .filter((seg) => seg !== "" && seg !== "." && seg !== "..")
+      .join("/");
+    if (cleaned) result.directory = cleaned;
   }
   return result;
+}
+
+const RAW_README_NAMES = ["README.md", "Readme.md", "readme.md"];
+
+async function fetchText(
+  url: string,
+  headers: Record<string, string> | undefined,
+  deadline: number
+): Promise<string | null> {
+  try {
+    return await fetchWithTimeout(
+      url,
+      (response) => (response.ok ? response.text() : Promise.resolve(null)),
+      DEFAULT_REQUEST_TIMEOUT,
+      headers,
+      deadline
+    );
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchGitHubReadme(
   owner: string,
   repo: string,
-  directory?: string
+  directory?: string,
+  ref?: string
 ): Promise<string | null> {
-  let url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
-  if (directory) {
-    url += `/${directory.split("/").map(encodeURIComponent).join("/")}`;
-  }
-  try {
-    const response = await fetchWithTimeout(url, DEFAULT_REQUEST_TIMEOUT, {
-      Accept: "application/vnd.github.raw",
-      "User-Agent": USER_AGENT,
+  const ownerRepo = `${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const dirPath = directory
+    ? `/${directory.split("/").map(encodeURIComponent).join("/")}`
+    : "";
+  const refs = ref && ref !== "HEAD" ? [ref, "HEAD"] : ["HEAD"];
+  const candidates: Array<{ url: string; headers?: Record<string, string> }> = [];
+  for (const r of refs) {
+    const query = r === "HEAD" ? "" : `?ref=${encodeURIComponent(r)}`;
+    candidates.push({
+      url: `${GITHUB_API_URL}/repos/${ownerRepo}/readme${dirPath}${query}`,
+      headers: { Accept: "application/vnd.github.raw" },
     });
-    if (!response.ok) return null;
-    return await response.text();
-  } catch {
-    return null;
+    for (const name of RAW_README_NAMES) {
+      candidates.push({
+        url: `${GITHUB_RAW_URL}/${ownerRepo}/${encodeURIComponent(r)}${dirPath}/${name}`,
+      });
+    }
   }
+  const deadline = Date.now() + DEFAULT_REQUEST_TIMEOUT;
+  return candidates.reduce<Promise<string | null>>(
+    (found, candidate) =>
+      found.then((text) =>
+        text !== null || Date.now() >= deadline
+          ? text
+          : fetchText(candidate.url, candidate.headers, deadline)
+      ),
+    Promise.resolve(null)
+  );
 }

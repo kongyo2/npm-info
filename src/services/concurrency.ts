@@ -1,7 +1,3 @@
-/**
- * Create a concurrency limiter: returns a function that runs async tasks
- * with at most `max` in flight, queueing the rest in FIFO order.
- */
 export function createLimiter(max: number) {
   let active = 0;
   const queue: Array<() => void> = [];
@@ -9,7 +5,8 @@ export function createLimiter(max: number) {
     return new Promise<T>((resolve, reject) => {
       const run = (): void => {
         active++;
-        fn()
+        Promise.resolve()
+          .then(fn)
           .then(resolve, reject)
           .finally(() => {
             active--;
