@@ -87,6 +87,17 @@ describe("resolveDependencySpec", () => {
       hint: "^1",
     });
   });
+
+  it("rejects npm: aliases with an empty or malformed target", () => {
+    assert.equal(resolveDependencySpec("foo", "npm:"), null);
+    assert.equal(resolveDependencySpec("foo", "npm:@scope"), null);
+    assert.equal(resolveDependencySpec("foo", "npm:@scope/"), null);
+    assert.equal(resolveDependencySpec("foo", "npm:@@1.0.0"), null);
+    assert.deepEqual(resolveDependencySpec("foo", "npm:bar@"), {
+      name: "bar",
+      hint: "latest",
+    });
+  });
 });
 
 describe("formatDeps", () => {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchAbbreviatedPackument, fetchResolvedVersion } from "../services/npm-api.js";
 import { createLimiter } from "../services/concurrency.js";
+import { PACKAGE_NAME_REGEX } from "../constants.js";
 import { maxSatisfying } from "../services/semver.js";
 import type { AbbreviatedPackument, NpmPackageVersion } from "../types.js";
 import { errorMessage, errorResult, textResult } from "./shared.js";
@@ -81,10 +82,9 @@ export function resolveDependencySpec(
     const spec = trimmed.slice(4).trim();
     const isScoped = spec.startsWith("@");
     const at = isScoped ? spec.indexOf("@", 1) : spec.indexOf("@");
-    if (at > 0) {
-      return { name: spec.slice(0, at), hint: spec.slice(at + 1) || "latest" };
-    }
-    return { name: spec, hint: "latest" };
+    const name = at > 0 ? spec.slice(0, at) : spec;
+    if (!PACKAGE_NAME_REGEX.test(name)) return null;
+    return { name, hint: at > 0 ? spec.slice(at + 1) || "latest" : "latest" };
   }
 
   if (
