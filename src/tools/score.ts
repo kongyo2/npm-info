@@ -260,11 +260,7 @@ Examples:
               modified: packument.modified,
             };
           } catch (fetchErr) {
-            return errorResult(
-              fetchErr instanceof HttpError && fetchErr.status === 404
-                ? fetchErr
-                : npmsRes.error
-            );
+            return errorResult(fetchErr);
           }
         }
         const hasDownloads = !!(downloads.lastWeek || downloads.lastMonth);

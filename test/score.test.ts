@@ -166,4 +166,29 @@ describe("npm_package_score handler", () => {
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /not found on npm/);
   });
+
+  it("surfaces the registry error when npms 404s and the registry fails", async (t) => {
+    type Handler = (args: { package_name: string }) => Promise<{
+      content: { text: string }[];
+      isError?: boolean;
+    }>;
+    let handler: Handler | undefined;
+    registerScoreTool({
+      registerTool: (_name: string, _spec: unknown, h: Handler) => {
+        handler = h;
+      },
+    } as unknown as McpServer);
+    assert.ok(handler);
+    t.mock.method(globalThis, "fetch", async (input) => {
+      const url = String(input);
+      if (url.includes("api.npms.io")) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response("boom", { status: 500 });
+    });
+    const res = await handler({ package_name: "has-no-npms" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /npm registry returned status 500/);
+    assert.doesNotMatch(res.content[0].text, /npms\.io/);
+  });
 });
