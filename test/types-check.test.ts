@@ -33,6 +33,7 @@ describe("inspectExportsForTypes", () => {
     assert.deepEqual(result, {
       found: true,
       rootEntry: "./index.d.ts",
+      rootCondition: "types",
       subpathCount: 1,
       misorderedSubpaths: [],
     });
@@ -54,6 +55,7 @@ describe("inspectExportsForTypes", () => {
     assert.deepEqual(result, {
       found: true,
       rootEntry: "./index.d.ts",
+      rootCondition: "types",
       subpathCount: 2,
       misorderedSubpaths: [],
     });
@@ -67,12 +69,20 @@ describe("inspectExportsForTypes", () => {
     assert.equal(result.rootEntry, "./index.d.mts");
   });
 
-  it("detects TS-version-gated types@ conditions", () => {
+  it("detects TS-version-gated types@ conditions and reports the gate", () => {
     const result = inspectExportsForTypes({
       ".": { "types@>=5.5": "./ts5.5/index.d.ts", default: "./index.js" },
     });
     assert.equal(result.found, true);
     assert.equal(result.rootEntry, "./ts5.5/index.d.ts");
+    assert.equal(result.rootCondition, "types@>=5.5");
+  });
+
+  it("reports the plain types condition for ungated entries", () => {
+    const result = inspectExportsForTypes({
+      ".": { types: "./index.d.ts", default: "./index.js" },
+    });
+    assert.equal(result.rootCondition, "types");
   });
 
   it("resolves fallback arrays on the types condition", () => {
@@ -149,6 +159,16 @@ describe("detectTypesEntry", () => {
     });
     assert.equal(result.source, "exports");
     assert.equal(result.entry, "./t.d.ts");
+    assert.equal(result.entryCondition, "types");
+  });
+
+  it("carries the gate of a types@<spec>-only entry", () => {
+    const result = detectTypesEntry({
+      ...base,
+      exports: { ".": { "types@<5.4": "./old.d.ts", default: "./index.js" } },
+    });
+    assert.equal(result.source, "exports");
+    assert.equal(result.entryCondition, "types@<5.4");
   });
 
   it("detects typesVersions-only packages as bundled", () => {

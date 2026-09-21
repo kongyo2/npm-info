@@ -371,7 +371,7 @@ ASCII tree with deduplicated nodes.
 
 Args:
   - package_name (string): The npm package name
-  - version (string, optional): Specific version to check (defaults to latest)
+  - version (string, optional): Version, dist-tag, or semver range (defaults to latest)
   - depth (number, optional, 1-5): Transitive production-dep depth (default 1)
   - include_dev (boolean, optional): Include devDependencies (default true; ignored when depth > 1)
   - include_peer (boolean, optional): Include peerDependencies (default true; ignored when depth > 1)

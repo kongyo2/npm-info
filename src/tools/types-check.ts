@@ -25,6 +25,9 @@ interface ExportsTypesFinding {
   found: boolean;
   /** First detected types entry path (the "." or root subpath when possible) */
   rootEntry?: string;
+  /** Condition key that produced `rootEntry`: `types`, or a TS-version gated
+   * `types@<spec>` key — gated entries only apply to matching TS versions. */
+  rootCondition?: string;
   /** Number of subpath patterns where a "types" condition was detected */
   subpathCount: number;
   /** Subpaths where a `types`/`types@*` key is not listed first —
@@ -65,14 +68,14 @@ export function inspectExportsForTypes(
 
   const visitConditions = (
     node: PackageExports | null | undefined
-  ): { entry?: string; misordered: boolean } => {
+  ): { entry?: string; condition?: string; misordered: boolean } => {
     if (!node || typeof node !== "object") return { misordered: false };
     if (Array.isArray(node)) {
       let misordered = false;
       for (const item of node) {
         const nested = visitConditions(item);
         if (nested.misordered) misordered = true;
-        if (nested.entry) return { entry: nested.entry, misordered };
+        if (nested.entry) return { ...nested, misordered };
       }
       return { misordered };
     }
@@ -85,18 +88,18 @@ export function inspectExportsForTypes(
     // Prefer the unconditional `"types"` entry; fall back to the first
     // versioned `types@<spec>` condition (TypeScript 5.5+ gated typing).
     const direct = pickTargetString(node["types"]);
-    if (direct) return { entry: direct, misordered };
+    if (direct) return { entry: direct, condition: "types", misordered };
     for (const [key, value] of Object.entries(node)) {
       if (key.startsWith("types@")) {
         const gated = pickTargetString(value);
-        if (gated) return { entry: gated, misordered };
+        if (gated) return { entry: gated, condition: key, misordered };
       }
     }
     for (const value of Object.values(node)) {
       if (value && typeof value === "object") {
         const nested = visitConditions(value);
         if (nested.misordered) misordered = true;
-        if (nested.entry) return { entry: nested.entry, misordered };
+        if (nested.entry) return { ...nested, misordered };
       }
     }
     return { misordered };
@@ -108,11 +111,12 @@ export function inspectExportsForTypes(
     : false;
 
   if (!hasSubpaths) {
-    const { entry, misordered } = visitConditions(exports);
+    const { entry, condition, misordered } = visitConditions(exports);
     if (entry) {
       return {
         found: true,
         rootEntry: entry,
+        rootCondition: condition,
         subpathCount: 1,
         misorderedSubpaths: misordered ? ["."] : [],
       };
@@ -121,24 +125,26 @@ export function inspectExportsForTypes(
   }
 
   let subpathCount = 0;
-  let dotEntry: string | undefined;
-  let firstEntry: string | undefined;
+  let dot: { entry: string; condition?: string } | undefined;
+  let first: { entry: string; condition?: string } | undefined;
   const misorderedSubpaths: string[] = [];
   for (const [subpath, value] of Object.entries(exports)) {
     if (!subpath.startsWith(".")) continue;
-    const { entry, misordered } = visitConditions(value);
+    const { entry, condition, misordered } = visitConditions(value);
     if (entry) {
       subpathCount++;
-      if (subpath === ".") dotEntry = entry;
-      else if (!firstEntry) firstEntry = entry;
+      if (subpath === ".") dot = { entry, condition };
+      else if (!first) first = { entry, condition };
     }
     if (misordered) misorderedSubpaths.push(subpath);
   }
 
   if (subpathCount === 0) return { found: false, subpathCount: 0, misorderedSubpaths };
+  const root = dot ?? first;
   return {
     found: true,
-    rootEntry: dotEntry ?? firstEntry,
+    rootEntry: root?.entry,
+    rootCondition: root?.condition,
     subpathCount,
     misorderedSubpaths,
   };
@@ -146,6 +152,9 @@ export function inspectExportsForTypes(
 
 export function detectTypesEntry(versionData: NpmPackageVersion): {
   entry?: string;
+  /** For `exports`-sourced entries, the condition key that declared it —
+   * a `types@<spec>` key means the entry is gated to those TS versions. */
+  entryCondition?: string;
   source: "types" | "typings" | "exports" | "typesVersions" | "none";
   exportsSubpathCount: number;
   misorderedSubpaths: string[];
@@ -170,6 +179,7 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
   if (fromExports.found) {
     return {
       entry: fromExports.rootEntry,
+      entryCondition: fromExports.rootCondition,
       source: "exports",
       exportsSubpathCount: fromExports.subpathCount,
       misorderedSubpaths: fromExports.misorderedSubpaths,
@@ -207,7 +217,7 @@ warns when a \`types\` condition is not listed first in \`exports\`
 
 Args:
   - package_name (string): The npm package name
-  - version (string, optional): Specific version to check (defaults to latest)
+  - version (string, optional): Version, dist-tag, or semver range (defaults to latest)
 
 Returns markdown with:
   - Whether bundled types are present and which field declared them
@@ -261,7 +271,13 @@ Examples:
         if (hasBundledTypes) {
           lines.push(`**Bundled Types:** Yes`);
           if (detection.entry) {
-            lines.push(`**Types Entry:** ${detection.entry}`);
+            // A gated `types@<spec>` entry only applies to matching TS
+            // versions; say so rather than presenting it as the entry.
+            const gate =
+              detection.entryCondition && detection.entryCondition !== "types"
+                ? ` (only for TypeScript matching \`${detection.entryCondition}\`)`
+                : "";
+            lines.push(`**Types Entry:** ${detection.entry}${gate}`);
           }
           const sourceLabel =
             detection.source === "types"
