@@ -361,6 +361,16 @@ describe("fetchNpmDownloads", () => {
     assert.equal(d.lastMonth?.downloads, 40);
   });
 
+  it("rejects invalid package names before any request", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({});
+    });
+    await assert.rejects(fetchNpmDownloads("a/b/c"), /Invalid package name/);
+    assert.equal(calls, 0);
+  });
+
   it("tolerates a single failed window", async (t) => {
     t.mock.method(globalThis, "fetch", async (url: unknown) => {
       const u = String(url);

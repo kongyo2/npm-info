@@ -273,6 +273,7 @@ export async function checkDefinitelyTyped(
 export async function fetchNpmDownloads(
   packageName: string
 ): Promise<{ lastWeek?: NpmDownloadsResponse; lastMonth?: NpmDownloadsResponse }> {
+  validatePackageName(packageName);
   const encoded = encodePackageName(packageName);
   const [lastWeek, lastMonth] = await Promise.all([
     fetchJson<NpmDownloadsResponse>(
