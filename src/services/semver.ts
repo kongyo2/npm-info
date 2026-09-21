@@ -353,7 +353,8 @@ export function maxSatisfying(versions: string[], range: string): string | null 
 
   for (const { sub, parsed } of subRanges) {
     const prereleaseAnchors: Array<[number, number, number]> = [];
-    for (const m of sub.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
+    const anchorText = sub.replace(/\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*/g, "");
+    for (const m of anchorText.matchAll(/(\d+)\.(\d+)\.(\d+)-[\w.+-]+/g)) {
       prereleaseAnchors.push([Number(m[1]), Number(m[2]), Number(m[3])]);
     }
     const allowsPrerelease = prereleaseAnchors.length > 0;
