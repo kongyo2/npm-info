@@ -68,6 +68,7 @@ function depsRecord(value: unknown): Record<string, string> {
 interface TreeNode {
   version: string;
   dependencies: Record<string, string>;
+  optionalDeps?: ReadonlySet<string>;
 }
 
 export function resolveDependencySpec(
@@ -200,13 +201,19 @@ export async function resolveProductionTree(
 
     const versionData = versions[resolvedVersion] as NpmPackageVersion | undefined;
     const deps = depsRecord(versionData?.dependencies);
+    const optDeps = depsRecord(versionData?.optionalDependencies);
+    const mergedDeps = { ...deps, ...optDeps };
     if (!tree[resolvedKey]) {
-      tree[resolvedKey] = { version: resolvedVersion, dependencies: deps };
+      tree[resolvedKey] = {
+        version: resolvedVersion,
+        dependencies: mergedDeps,
+        optionalDeps: new Set(Object.keys(optDeps)),
+      };
     }
 
     if (currentDepth < maxDepth) {
       await Promise.all(
-        Object.entries(deps).map(([alias, raw]) => {
+        Object.entries(mergedDeps).map(([alias, raw]) => {
           const spec = resolveDependencySpec(alias, raw);
           if (!spec) {
             warn(`Skipped non-registry dependency '${alias}': ${raw}`);
@@ -262,11 +269,18 @@ export function formatTree(result: ResolveResult, maxDepth: number): string[] {
   lines.push("```");
   const visited = new Set<string>();
 
-  const walk = (key: string, prefix: string, isLast: boolean, depth: number): void => {
+  const walk = (
+    key: string,
+    prefix: string,
+    isLast: boolean,
+    depth: number,
+    optional: boolean
+  ): void => {
     const node = result.tree[key];
     const connector = depth === 0 ? "" : isLast ? "└── " : "├── ";
     const cycleMarker = visited.has(key) ? " (already shown)" : "";
-    lines.push(`${prefix}${connector}${key}${cycleMarker}`);
+    const optionalMarker = optional ? " (optional)" : "";
+    lines.push(`${prefix}${connector}${key}${optionalMarker}${cycleMarker}`);
     if (visited.has(key) || !node) return;
     visited.add(key);
 
@@ -274,16 +288,18 @@ export function formatTree(result: ResolveResult, maxDepth: number): string[] {
     const nextPrefix = depth === 0 ? "" : prefix + (isLast ? "    " : "│   ");
     deps.forEach(([depName, depRange], idx) => {
       const isLastChild = idx === deps.length - 1;
+      const depOptional = node.optionalDeps?.has(depName) ?? false;
+      const depMarker = depOptional ? " (optional)" : "";
       const spec = resolveDependencySpec(depName, depRange);
       if (!spec) {
         lines.push(
-          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange} (non-registry)`
+          `${nextPrefix}${isLastChild ? "└── " : "├── "}${depName}@${depRange}${depMarker} (non-registry)`
         );
         return;
       }
       const childKey = result.hintToKey.get(`${spec.name}@${spec.hint}`);
       if (childKey && result.tree[childKey]) {
-        walk(childKey, nextPrefix, isLastChild, depth + 1);
+        walk(childKey, nextPrefix, isLastChild, depth + 1, depOptional);
       } else {
         const label =
           spec.name === depName
@@ -295,12 +311,14 @@ export function formatTree(result: ResolveResult, maxDepth: number): string[] {
             : result.truncated
               ? "truncated"
               : "not resolved";
-        lines.push(`${nextPrefix}${isLastChild ? "└── " : "├── "}${label} (${reason})`);
+        lines.push(
+          `${nextPrefix}${isLastChild ? "└── " : "├── "}${label}${depMarker} (${reason})`
+        );
       }
     });
   };
 
-  walk(result.rootKey, "", true, 0);
+  walk(result.rootKey, "", true, 0, false);
   lines.push("```");
   lines.push("");
 
@@ -322,8 +340,9 @@ export function registerDependenciesTool(server: McpServer): void {
 By default returns direct dependencies of all kinds (dependencies, devDependencies,
 peerDependencies, optionalDependencies) along with totals. When \`depth\` is
 greater than 1, resolves the transitive production dependency tree (using the
-abbreviated packument format and a bounded fetch limiter) and renders it as an
-ASCII tree with deduplicated nodes.
+abbreviated packument format and a bounded fetch limiter; optionalDependencies
+are included and marked "(optional)") and renders it as an ASCII tree with
+deduplicated nodes.
 
 Args:
   - package_name (string): The npm package name

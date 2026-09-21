@@ -214,6 +214,32 @@ describe("resolveProductionTree", () => {
     assert.match(text, /bad@\^1\.0\.0 \(not resolved\)/);
   });
 
+  it("includes optionalDependencies in the tree, marked optional", async (t) => {
+    const a: AbbreviatedPackument = {
+      name: "a",
+      "dist-tags": { latest: "1.0.0" },
+      versions: {
+        "1.0.0": {
+          name: "a",
+          version: "1.0.0",
+          dependencies: { req: "^1.0.0" },
+          optionalDependencies: { opt: "^2.0.0", req: "^9.9.9" },
+        },
+      },
+    };
+    const fixtures = {
+      root: packument("root", { "1.0.0": { a: "^1.0.0" } }),
+      a,
+      opt: packument("opt", { "2.5.0": {} }),
+      req: packument("req", { "9.9.9": {} }),
+    };
+    stubRegistry(t, fixtures);
+    const result = await resolveProductionTree("root", "1.0.0", 2);
+    const text = formatTree(result, 2).join("\n");
+    assert.match(text, /opt@2\.5\.0 \(optional\)/);
+    assert.match(text, /req@9\.9\.9 \(optional\)/);
+  });
+
   it("dedups identical warnings", async (t) => {
     const fixtures = {
       root: packument("root", {
