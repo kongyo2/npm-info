@@ -15,8 +15,7 @@ const BUILD_GROUP = /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/;
 function stripBuild(v: string): string | null {
   const plusIdx = v.indexOf("+");
   if (plusIdx === -1) return v;
-  const firstGroup = v.slice(plusIdx + 1).split("+")[0];
-  return BUILD_GROUP.test(firstGroup) ? v.slice(0, plusIdx) : null;
+  return BUILD_GROUP.test(v.slice(plusIdx + 1)) ? v.slice(0, plusIdx) : null;
 }
 
 export function parseSemver(v: string): SemVer | null {
@@ -63,8 +62,9 @@ function isWildcard(segment: string | undefined): boolean {
 }
 
 function parsePartial(v: string): PartialSemver | null {
-  const stripped = stripBuild(v.replace(/^v/, ""));
-  if (stripped === null) return null;
+  const stripped = v
+    .replace(/^v/, "")
+    .replace(/\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*/g, "");
   const m = stripped.match(
     new RegExp(
       `^((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:-${PRERELEASE})?)?)?$`

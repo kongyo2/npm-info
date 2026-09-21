@@ -332,6 +332,11 @@ describe("maxSatisfying: malformed operands (node-semver parity)", () => {
     assert.equal(maxSatisfying(VERSIONS, "1.2.3+build.01"), "1.2.3");
   });
 
+  it("skips candidates whose build metadata is itself invalid", () => {
+    assert.equal(maxSatisfying(["1.2.3+a..b", "1.2.4"], "*"), "1.2.4");
+    assert.equal(maxSatisfying(["1.2.3+a+b"], "*"), null);
+  });
+
   it("ignores unparseable version strings in the candidates list", () => {
     assert.equal(maxSatisfying(["1.1.1-.a", "1.2.3"], "1.1.1-.a"), null);
     assert.equal(maxSatisfying(["1.1.1-_a", "1.2.3"], "*"), "1.2.3");
