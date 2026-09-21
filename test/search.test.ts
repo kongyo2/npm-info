@@ -85,6 +85,7 @@ describe("formatSearchResults", () => {
     assert.match(text, /\*\*Score:\*\* quality=50%/);
     assert.doesNotMatch(text, /NaN|undefined/);
     assert.doesNotMatch(text, /\*\*Score:\*\*\s*$/m);
+    assert.match(text, /Found 3 packages \(showing 2\)/);
   });
 
   it("tolerates a missing objects array", () => {

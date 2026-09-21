@@ -197,9 +197,13 @@ function parseConstraintBounds(r: string): SemverRange | null {
 
   const opMatch = r.match(/^(>=|<=|>|<|=|\^|~>?)/);
   const op = opMatch ? (opMatch[1] === "~>" ? "~" : opMatch[1]) : "";
-  const p = parsePartial(opMatch ? r.slice(opMatch[1].length) : r);
+  const rest = opMatch ? r.slice(opMatch[1].length) : r;
+  const prefix = rest.match(/^[v=]*/)?.[0] ?? "";
+  const p = parsePartial(rest.slice(prefix.length));
   if (!p) return null;
   const { semver: base, parts } = p;
+  const soup = prefix.includes("=") || prefix.length > 1;
+  if (soup && parts === 3 && op !== "~" && op !== "^") return null;
 
   if (p.invalidOrder && op !== "~" && op !== "^") return null;
 
@@ -313,9 +317,10 @@ function parseRange(r: string): SemverRange | null {
   if (hyphenExpanded === null) return null;
 
   const normalized = hyphenExpanded
+    .replace(/(?<![<>=v])(>=|<=|>|<) (?!=\s)/g, "$1")
+    .replace(/(?<![<>=v\s])( ?)= (?!=\s)/g, "$1=")
     .replace(/(\^|~>?)  (?=[0-9xX*v])/g, "$1")
     .replace(/(\^|~>?) (?!=\s)/g, "$1")
-    .replace(/(?<!\s)( ?)(>=|<=|>|<|=) (?!=\s)/g, "$1$2")
     .trim();
   if (normalized === "") return rangeAll();
 

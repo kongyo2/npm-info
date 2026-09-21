@@ -20,6 +20,8 @@ npm パッケージ情報を提供する MCP サーバー。AI エージェン�
 | `npm_package_types`        | Check TypeScript type definitions            | `package_name`, `version` (version, dist-tag, or range)                                                                                                 |
 | `npm_package_score`        | Get quality / popularity / maintenance score | `package_name`                                                                                                                                          |
 
+`version` defaults to `latest`. With `depth` above 1, `npm_package_dependencies` walks the production tree (`dependencies` plus `optionalDependencies`, marked `(optional)`) regardless of the `include_*` flags, which only shape the direct-dependency listing; resolution stops after 200 packuments or 20 seconds and says so.
+
 ## Setup
 
 ```json

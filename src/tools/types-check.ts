@@ -5,6 +5,7 @@ import {
   checkDefinitelyTyped,
   typesPackageName,
 } from "../services/npm-api.js";
+import { maxSatisfying } from "../services/semver.js";
 import type { NpmPackageVersion, PackageExports } from "../types.js";
 import { errorMessage, errorResult, textResult } from "./shared.js";
 
@@ -195,13 +196,7 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
       misorderedSubpaths: fromExports.misorderedSubpaths,
     };
   }
-  const typesVersions = versionData.typesVersions;
-  if (
-    typesVersions &&
-    typeof typesVersions === "object" &&
-    !Array.isArray(typesVersions) &&
-    Object.keys(typesVersions).length > 0
-  ) {
+  if (typesVersionsCoverCurrentTypeScript(versionData.typesVersions)) {
     return {
       source: "typesVersions",
       exportsSubpathCount: 0,
@@ -209,6 +204,21 @@ export function detectTypesEntry(versionData: NpmPackageVersion): {
     };
   }
   return { source: "none", exportsSubpathCount: 0, misorderedSubpaths: [] };
+}
+
+const TYPESCRIPT_PROBES = ["4.0.0", "5.0.0", "6.0.0"];
+
+export function typesVersionsCoverCurrentTypeScript(typesVersions: unknown): boolean {
+  if (
+    !typesVersions ||
+    typeof typesVersions !== "object" ||
+    Array.isArray(typesVersions)
+  ) {
+    return false;
+  }
+  return Object.keys(typesVersions).some(
+    (selector) => maxSatisfying(TYPESCRIPT_PROBES, selector) !== null
+  );
 }
 
 export function registerTypesCheckTool(server: McpServer): void {
@@ -330,7 +340,9 @@ Examples:
             lines.push(`> ${dtResult.deprecated}`);
             lines.push("");
             lines.push(
-              "Do **not** install the @types package — the library provides its own type definitions (declared in a way this check does not detect, e.g. alongside the JS entry point)."
+              version?.trim() && version.trim() !== "latest"
+                ? `The current release of ${package_name} provides its own type definitions, so the latest ${typesName} is only a stub. For ${package_name}@${targetVersion} an older ${typesName} release may still be needed — check \`npm view ${typesName} versions\` for one published alongside it.`
+                : "Do **not** install the @types package — the library provides its own type definitions (declared in a way this check does not detect, e.g. alongside the JS entry point)."
             );
           } else {
             lines.push(`**DefinitelyTyped:** Yes (${typesName}@${dtResult.version})`);

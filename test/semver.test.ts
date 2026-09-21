@@ -487,3 +487,47 @@ describe("maxSatisfying: candidate version normalization", () => {
     assert.equal(maxSatisfying(["1.2.3 ", "1.2.3+ok"], "1.2.3+ok"), "1.2.3 ");
   });
 });
+
+describe("maxSatisfying: operator prefixes accepted by node-semver", () => {
+  it("accepts = and v after ^ and ~ on any operand", () => {
+    const pool = ["1.2.3", "1.5.0", "2.0.0", "2.0.5", "2.1.0"];
+    assert.equal(maxSatisfying(pool, "~=2.0.0"), "2.0.5");
+    assert.equal(maxSatisfying(pool, "^=1.2.3"), "1.5.0");
+    assert.equal(maxSatisfying(pool, "^1 || ~=2.0.0"), "2.0.5");
+    assert.equal(maxSatisfying(pool, "~v2.0.0"), "2.0.5");
+    assert.equal(maxSatisfying(pool, "^v1"), "1.5.0");
+    assert.equal(maxSatisfying(pool, "~>=2.0"), "2.0.5");
+    assert.equal(maxSatisfying(pool, "^=1.x"), "1.5.0");
+  });
+
+  it("accepts prefix soup on partial comparator operands only", () => {
+    const pool = ["1.2.3", "1.5.0", "2.0.0", "2.0.5", "2.1.0"];
+    assert.equal(maxSatisfying(pool, ">==1.2"), "2.1.0");
+    assert.equal(maxSatisfying(pool, "v=1"), "1.5.0");
+    assert.equal(maxSatisfying(pool, "=v1.2.3"), "1.2.3");
+    assert.equal(maxSatisfying(pool, "==1.2.3"), null);
+    assert.equal(maxSatisfying(pool, "v=1.2.3"), null);
+    assert.equal(maxSatisfying(pool, ">==1.2.3"), null);
+  });
+
+  it("mirrors node-semver's space handling around prefix soup", () => {
+    const pool = ["1.2.3", "1.5.0", "2.0.0", "2.0.5", "2.1.0"];
+    assert.equal(maxSatisfying(pool, "~= 2.0.0"), "2.0.5");
+    assert.equal(maxSatisfying(pool, "^= 1.2"), "1.5.0");
+    assert.equal(maxSatisfying(pool, "~ = 1.2"), "1.2.3");
+    assert.equal(maxSatisfying(pool, "= v1.2.3"), "1.2.3");
+    assert.equal(maxSatisfying(pool, "> =1.2.3"), "2.1.0");
+    assert.equal(maxSatisfying(pool, "^ =1.2"), "1.5.0");
+    assert.equal(maxSatisfying(pool, ">=1.2.3 +meta <= 2"), "2.1.0");
+    assert.equal(maxSatisfying(pool, ">=1.2.3 +meta = 2.0.5"), null);
+    assert.equal(maxSatisfying(pool, "== x"), null);
+    assert.equal(maxSatisfying(pool, "=== x"), null);
+    assert.equal(maxSatisfying(pool, ">== 1.2"), null);
+    assert.equal(maxSatisfying(pool, "<= = 2"), null);
+    assert.equal(maxSatisfying(pool, "v= 1"), null);
+    assert.equal(maxSatisfying(pool, "~v= 1"), null);
+    assert.equal(maxSatisfying(pool, "=v 1.2.3"), null);
+    assert.equal(maxSatisfying(pool, "~=v 2.0.0"), null);
+    assert.equal(maxSatisfying(pool, "> = 1.2.3"), null);
+  });
+});

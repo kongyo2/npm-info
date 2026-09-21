@@ -302,6 +302,36 @@ describe("resolveProductionTree", () => {
     assert.ok(Object.keys(result.tree).length <= 2);
   });
 
+  it("stops queued fetches once the deadline passes", async (t) => {
+    const deps: Record<string, string> = {};
+    for (let i = 0; i < 20; i++) deps[`dep${i}`] = "^1.0.0";
+    const fixtures: Record<string, AbbreviatedPackument> = {
+      root: packument("root", { "1.0.0": deps }),
+    };
+    for (let i = 0; i < 20; i++)
+      fixtures[`dep${i}`] = packument(`dep${i}`, { "1.0.0": {} });
+    const calls: string[] = [];
+    let clock = 0;
+    t.mock.method(Date, "now", () => clock);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const name = decodeURIComponent(String(url).split("/").pop() ?? "");
+      calls.push(name);
+      clock += 30;
+      return new Response(JSON.stringify(fixtures[name]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const result = await resolveProductionTree("root", "1.0.0", 2, {
+      maxPackages: 100,
+      timeLimitMs: 100,
+    });
+    assert.equal(result.truncated, true);
+    assert.equal(result.truncatedBy, "time");
+    assert.ok(calls.length < 21, `expected fewer than 21 fetches, saw ${calls.length}`);
+    assert.equal(result.warnings.length, 0);
+  });
+
   it("truncates when the time budget is already spent", async (t) => {
     stubRegistry(t, {});
     const result = await resolveProductionTree("root", "1.0.0", 3, {

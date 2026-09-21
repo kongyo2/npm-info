@@ -142,10 +142,17 @@ export async function resolveProductionTree(
     }
   };
 
+  const budgetExhausted = Symbol("budget");
   const getPackument = (name: string): Promise<AbbreviatedPackument> => {
     let pending = packuments.get(name);
     if (!pending) {
-      pending = runLimited(() => fetchAbbreviatedPackument(name));
+      pending = runLimited(() => {
+        if (Date.now() > deadline) {
+          truncatedBy ??= "time";
+          return Promise.reject(budgetExhausted);
+        }
+        return fetchAbbreviatedPackument(name);
+      });
       packuments.set(name, pending);
     }
     return pending;
@@ -174,6 +181,7 @@ export async function resolveProductionTree(
     try {
       pkg = await getPackument(name);
     } catch (err) {
+      if (err === budgetExhausted) return;
       warn(`Failed to fetch ${name}: ${errorMessage(err)}`);
       if (isRoot && !rootResolvedKey) rootResolvedKey = hintKey;
       return;

@@ -53,7 +53,9 @@ export function formatRepository(
   const github = extractGitHubRepo(repo);
   if (github) {
     const base = `https://github.com/${github.owner}/${github.repo}`;
-    return github.directory ? `${base}/tree/HEAD/${github.directory}` : base;
+    return github.directory
+      ? `${base}/tree/${github.ref ?? "HEAD"}/${github.directory}`
+      : base;
   }
 
   return url

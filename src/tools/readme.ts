@@ -67,7 +67,8 @@ Examples:
             const ghReadme = await fetchGitHubReadme(
               ghRepo.owner,
               ghRepo.repo,
-              ghRepo.directory
+              ghRepo.directory,
+              ghRepo.ref
             );
             if (ghReadme) {
               readmeContent = ghReadme;

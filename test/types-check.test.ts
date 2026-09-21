@@ -6,6 +6,7 @@ import {
   isDefinitelyTypedStub,
 } from "../src/tools/types-check.js";
 import type { NpmPackageVersion } from "../src/types.js";
+import { typesVersionsCoverCurrentTypeScript } from "../src/tools/types-check.js";
 
 describe("inspectExportsForTypes", () => {
   it("finds nothing in string exports that are not declarations", () => {
@@ -213,6 +214,22 @@ describe("detectTypesEntry", () => {
       typesVersions: { ">=4.0": { "*": ["ts4.0/*"] } },
     });
     assert.equal(result.source, "typesVersions");
+  });
+
+  it("ignores typesVersions selectors that only cover old TypeScript releases", () => {
+    const result = detectTypesEntry({
+      ...base,
+      main: "./index.js",
+      typesVersions: { "<2.0": { "*": ["ts/*"] } },
+    });
+    assert.equal(result.source, "none");
+    assert.equal(typesVersionsCoverCurrentTypeScript({ "*": { "*": ["ts/*"] } }), true);
+    assert.equal(
+      typesVersionsCoverCurrentTypeScript({ ">=3.1 <5": { "*": ["a/*"] } }),
+      true
+    );
+    assert.equal(typesVersionsCoverCurrentTypeScript({ "<2.0": {}, ">=4.1": {} }), true);
+    assert.equal(typesVersionsCoverCurrentTypeScript("nope"), false);
   });
 
   it("ignores an empty typesVersions map", () => {

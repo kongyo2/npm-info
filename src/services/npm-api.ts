@@ -302,9 +302,16 @@ export async function fetchNpmDownloads(
   return { lastWeek, lastMonth };
 }
 
+export interface GitHubRepoRef {
+  owner: string;
+  repo: string;
+  directory?: string;
+  ref?: string;
+}
+
 export function extractGitHubRepo(
   repository: NpmRegistryResponse["repository"]
-): { owner: string; repo: string; directory?: string } | null {
+): GitHubRepoRef | null {
   if (!repository) return null;
 
   const repoObj = typeof repository === "string" ? null : repository;
@@ -315,16 +322,22 @@ export function extractGitHubRepo(
   const match =
     shorthandMatch ??
     url.match(
-      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/[^/?#\s]+(\/[^?#\s]*)?)?\/?(?:[#?].*)?$/
+      /(?:^|\/\/|git@)github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([^/?#\s]+)(\/[^?#\s]*)?)?\/?(?:[#?].*)?$/
     ) ??
     url.match(/^([\w.-]+)\/([\w.-]+)$/);
   if (!match) return null;
 
-  const result: { owner: string; repo: string; directory?: string } = {
-    owner: match[1],
-    repo: match[2],
-  };
-  const directory = repoObj?.directory ?? repoObj?.path ?? match[3]?.slice(1);
+  const result: GitHubRepoRef = { owner: match[1], repo: match[2] };
+  if (match === shorthandMatch || match[3] === undefined) {
+    const directory = repoObj?.directory ?? repoObj?.path;
+    return withDirectory(result, directory);
+  }
+  if (match[3] !== "HEAD") result.ref = match[3];
+  const directory = repoObj?.directory ?? repoObj?.path ?? match[4]?.slice(1);
+  return withDirectory(result, directory);
+}
+
+function withDirectory(result: GitHubRepoRef, directory: unknown): GitHubRepoRef {
   if (typeof directory === "string" && directory) {
     const cleaned = directory
       .split("/")
@@ -356,26 +369,30 @@ async function fetchText(
 export async function fetchGitHubReadme(
   owner: string,
   repo: string,
-  directory?: string
+  directory?: string,
+  ref?: string
 ): Promise<string | null> {
   const ownerRepo = `${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const dirPath = directory
     ? `/${directory.split("/").map(encodeURIComponent).join("/")}`
     : "";
-  const fromApi = await fetchText(
-    `${GITHUB_API_URL}/repos/${ownerRepo}/readme${dirPath}`,
-    {
-      Accept: "application/vnd.github.raw",
+  const refs = ref && ref !== "HEAD" ? [ref, "HEAD"] : ["HEAD"];
+  const candidates: Array<{ url: string; headers?: Record<string, string> }> = [];
+  for (const r of refs) {
+    const query = r === "HEAD" ? "" : `?ref=${encodeURIComponent(r)}`;
+    candidates.push({
+      url: `${GITHUB_API_URL}/repos/${ownerRepo}/readme${dirPath}${query}`,
+      headers: { Accept: "application/vnd.github.raw" },
+    });
+    for (const name of RAW_README_NAMES) {
+      candidates.push({
+        url: `${GITHUB_RAW_URL}/${ownerRepo}/${encodeURIComponent(r)}${dirPath}/${name}`,
+      });
     }
-  );
-  if (fromApi !== null) return fromApi;
-
-  return RAW_README_NAMES.reduce<Promise<string | null>>(
-    (found, name) =>
-      found.then(
-        (text) =>
-          text ?? fetchText(`${GITHUB_RAW_URL}/${ownerRepo}/HEAD${dirPath}/${name}`)
-      ),
+  }
+  return candidates.reduce<Promise<string | null>>(
+    (found, candidate) =>
+      found.then((text) => text ?? fetchText(candidate.url, candidate.headers)),
     Promise.resolve(null)
   );
 }

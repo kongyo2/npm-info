@@ -134,11 +134,17 @@ describe("extractGitHubRepo", () => {
         type: "git",
         url: "https://github.com/babel/babel/tree/master/packages/babel-core",
       }),
-      { owner: "babel", repo: "babel", directory: "packages/babel-core" }
+      { owner: "babel", repo: "babel", directory: "packages/babel-core", ref: "master" }
     );
     assert.deepEqual(extractGitHubRepo("https://github.com/babel/babel/tree/master"), {
       owner: "babel",
       repo: "babel",
+      ref: "master",
+    });
+    assert.deepEqual(extractGitHubRepo("https://github.com/a/b/tree/HEAD/pkg"), {
+      owner: "a",
+      repo: "b",
+      directory: "pkg",
     });
   });
 
@@ -149,7 +155,7 @@ describe("extractGitHubRepo", () => {
         url: "https://github.com/babel/babel/tree/master/packages/babel-core",
         directory: "packages/babel-preset",
       }),
-      { owner: "babel", repo: "babel", directory: "packages/babel-preset" }
+      { owner: "babel", repo: "babel", directory: "packages/babel-preset", ref: "master" }
     );
   });
 
@@ -548,6 +554,26 @@ describe("fetchGitHubReadme", () => {
       "https://api.github.com/repos/expressjs/express/readme",
       "https://raw.githubusercontent.com/expressjs/express/HEAD/README.md",
       "https://raw.githubusercontent.com/expressjs/express/HEAD/Readme.md",
+    ]);
+  });
+
+  it("tries the parsed ref before HEAD for both the API and raw lookups", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.endsWith("/HEAD/pkg/README.md"))
+        return new Response("# head", { status: 200 });
+      return new Response("nope", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("o", "r", "pkg", "develop"), "# head");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/o/r/readme/pkg?ref=develop",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/README.md",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/Readme.md",
+      "https://raw.githubusercontent.com/o/r/develop/pkg/readme.md",
+      "https://api.github.com/repos/o/r/readme/pkg",
+      "https://raw.githubusercontent.com/o/r/HEAD/pkg/README.md",
     ]);
   });
 

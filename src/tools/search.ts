@@ -51,9 +51,11 @@ export function formatSearchResults(query: string, result: NpmSearchResult): str
   }
 
   const entryLines: string[] = [];
+  let shown = 0;
   for (const obj of objects) {
     const pkg = obj?.package;
     if (!pkg || typeof pkg.name !== "string" || !pkg.name) continue;
+    shown++;
     entryLines.push(
       typeof pkg.version === "string" && pkg.version
         ? `## ${pkg.name} (v${pkg.version})`
@@ -88,7 +90,7 @@ export function formatSearchResults(query: string, result: NpmSearchResult): str
   return [
     `# npm Search Results: "${query}"`,
     "",
-    `Found ${total} packages (showing ${objects.length})`,
+    `Found ${total} packages (showing ${shown})`,
     "",
     ...entryLines,
   ];
