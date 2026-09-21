@@ -7,14 +7,13 @@ export interface SemVer {
 
 const CORE_SEGMENT = "(?:0|[1-9]\\d*)";
 
-const PRERELEASE_ID = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const PRERELEASE_ID = "(?:0|[1-9][0-9]{0,256}|[0-9]{0,256}[A-Za-z-][0-9A-Za-z-]{0,250})";
 const PRERELEASE = `(${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)`;
 
 const BUILD_GROUP = /^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/;
 const BUILD_METADATA = /\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*/g;
 
 const MAX_VERSION_LENGTH = 256;
-const MAX_ID_LENGTH = 250;
 
 function stripBuild(v: string): string | null {
   const plusIdx = v.indexOf("+");
@@ -23,8 +22,8 @@ function stripBuild(v: string): string | null {
 }
 
 export function parseSemver(v: string): SemVer | null {
+  if (v.length > MAX_VERSION_LENGTH) return null;
   const trimmed = v.trim();
-  if (trimmed.length > MAX_VERSION_LENGTH) return null;
   const stripped = stripBuild(trimmed.replace(/^v/, ""));
   if (stripped === null) return null;
   const m = stripped.match(
@@ -68,16 +67,14 @@ function isWildcard(segment: string | undefined): boolean {
 }
 
 function parsePartial(v: string): PartialSemver | null {
-  const stripped = v.replace(/^v/, "").replace(/\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*/g, "");
+  const noBuild = v.replace(BUILD_METADATA, "");
+  const stripped = noBuild.replace(/^v/, "");
   const m = stripped.match(
     new RegExp(
       `^((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:\\.((?:${CORE_SEGMENT}|[xX*]))(?:-${PRERELEASE})?)?)?$`
     )
   );
   if (!m) return null;
-  if (m[4] && m[4].split(".").some((id) => id.length > MAX_ID_LENGTH)) {
-    return null;
-  }
 
   let parts = 0;
   let wildcardSeen = false;
@@ -103,6 +100,7 @@ function parsePartial(v: string): PartialSemver | null {
   ) {
     return null;
   }
+  if (partCount === 3 && noBuild.length > MAX_VERSION_LENGTH) return null;
 
   return {
     semver: {
@@ -114,6 +112,15 @@ function parsePartial(v: string): PartialSemver | null {
     parts: partCount,
     invalidOrder,
   };
+}
+
+function isSafe(v: SemVer | null): boolean {
+  return (
+    v === null ||
+    (v.major <= Number.MAX_SAFE_INTEGER &&
+      v.minor <= Number.MAX_SAFE_INTEGER &&
+      v.patch <= Number.MAX_SAFE_INTEGER)
+  );
 }
 
 export function cmpSemver(a: SemVer, b: SemVer): number {
@@ -180,6 +187,12 @@ function partialUpperBound(base: SemVer, parts: 1 | 2): SemVer {
 }
 
 function parseSingleConstraint(r: string): SemverRange | null {
+  const constraint = parseConstraintBounds(r);
+  if (!constraint || !isSafe(constraint.min) || !isSafe(constraint.max)) return null;
+  return constraint;
+}
+
+function parseConstraintBounds(r: string): SemverRange | null {
   if (r === "") return rangeAll();
 
   const opMatch = r.match(/^(>=|<=|>|<|=|\^|~>?)/);
@@ -266,9 +279,7 @@ const HYPHEN_OPERAND =
   `(?:-${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)?` +
   `(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?` +
   `)?)?`;
-const HYPHEN_RANGE = new RegExp(
-  `^\\s*(${HYPHEN_OPERAND})\\s+-\\s+(${HYPHEN_OPERAND})\\s*$`
-);
+const HYPHEN_RANGE = new RegExp(`^\\s?(${HYPHEN_OPERAND}) - (${HYPHEN_OPERAND})\\s?$`);
 
 function expandHyphenRanges(range: string): string | null {
   const m = range.match(HYPHEN_RANGE);
@@ -280,13 +291,13 @@ function expandHyphenRanges(range: string): string | null {
   if (!lo || !hi) return null;
   let min = "";
   if (lo.parts === 3) {
-    min = `>=${loRaw}`;
+    min = `>=${m[1]}`;
   } else if (lo.parts !== 0) {
     min = `>=${lo.semver.major}.${lo.semver.minor}.${lo.semver.patch}`;
   }
   let max = "";
   if (hi.parts === 3) {
-    max = `<=${hiRaw}`;
+    max = hi.semver.prerelease.length > 0 ? `<=${hiRaw}` : `<=${m[2]}`;
   } else if (hi.parts !== 0) {
     const bound = exclusiveFloor(partialUpperBound(hi.semver, hi.parts));
     max = `<${bound.major}.${bound.minor}.${bound.patch}-0`;
@@ -302,7 +313,9 @@ function parseRange(r: string): SemverRange | null {
   if (hyphenExpanded === null) return null;
 
   const normalized = hyphenExpanded
-    .replace(/(>=|<=|>|<|=|\^|~>?)\s+(?!=\s)/g, "$1")
+    .replace(/(\^|~>?)  (?=[0-9xX*v])/g, "$1")
+    .replace(/(\^|~>?) (?!=\s)/g, "$1")
+    .replace(/(?<!\s)( ?)(>=|<=|>|<|=) (?!=\s)/g, "$1$2")
     .trim();
   if (normalized === "") return rangeAll();
 
@@ -347,7 +360,10 @@ function parseRange(r: string): SemverRange | null {
 }
 
 export function maxSatisfying(versions: string[], range: string): string | null {
-  const r = range.trim().replace(/^v(?=\d)/, "");
+  const r = range
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^v(?=\d)/, "");
 
   const subRanges: Array<{ sub: string; parsed: SemverRange }> = [];
   for (const rawSub of r.split("||")) {

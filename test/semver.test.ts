@@ -355,11 +355,53 @@ describe("maxSatisfying: stray hyphens and operand prefixes", () => {
     assert.equal(maxSatisfying(["1.5.0", "2.0.0"], "x - 2.0.0 1.5.0"), null);
   });
 
-  it("accepts v/whitespace-prefixed endpoints like node-semver", () => {
+  it("accepts v/whitespace-prefixed partial endpoints like node-semver", () => {
     assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v 2.0"), "2.0.0");
     assert.equal(maxSatisfying(VERSIONS, "v 1.2 - 2.0.0"), "2.0.0");
     assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v=2.0"), "2.0.0");
-    assert.equal(maxSatisfying(VERSIONS, "v 1.2.3 - 2.0.0"), "2.0.0");
+  });
+
+  it("accepts full endpoints only with an attached v, like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "v1.2.3 - 2.0.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v2.0.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "v 1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - v 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "=1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "= 1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - =2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "vv1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "v=1.2.3 - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "v=1.2.3-alpha - 2.0.0"), null);
+  });
+
+  it("rebuilds prefixed upper endpoints with prereleases like node-semver", () => {
+    const preVersions = ["1.2.3", "2.0.0-beta", "2.0.0"];
+    assert.equal(maxSatisfying(preVersions, "1.2.3 - v=2.0.0-beta"), "2.0.0-beta");
+    assert.equal(maxSatisfying(preVersions, "1.2.3 - v 2.0.0-beta"), "2.0.0-beta");
+    assert.equal(maxSatisfying(preVersions, "1.2.3 - =2.0.0-beta"), "2.0.0-beta");
+  });
+
+  it("mirrors node-semver's trimming of build-stripped operator gaps", () => {
+    assert.equal(maxSatisfying(VERSIONS, "^ +meta 1"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, "~ +meta 1.2"), "1.2.4");
+    assert.equal(maxSatisfying(VERSIONS, "< +meta 2"), null);
+    assert.equal(maxSatisfying(VERSIONS, "< +meta +more 2"), null);
+    assert.equal(maxSatisfying(VERSIONS, ">= +meta 1.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "= +meta 1.2.3"), null);
+    assert.equal(maxSatisfying(VERSIONS, "^ +a +b 1"), null);
+    assert.equal(maxSatisfying(VERSIONS, "> =X.x +meta = X"), null);
+    assert.equal(maxSatisfying(VERSIONS, "~ +meta >X"), null);
+    assert.equal(maxSatisfying(VERSIONS, "~ >X"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "~> +meta 1.2"), "1.2.4");
+    assert.equal(maxSatisfying(VERSIONS, ">=1.2.3 +meta <2.0.0"), "1.3.0");
+    assert.equal(maxSatisfying(VERSIONS, ">=1.2.3 = 1.2.4"), "1.2.4");
+  });
+
+  it("treats a build-stripped hyphen separator as invalid like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 +meta - 2.0.0"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3  -  2.0.0"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3 - 2.0.0 +meta"), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, "1.2 - 2+build"), "2.0.0");
   });
 });
 
@@ -382,12 +424,43 @@ describe("maxSatisfying: exact 0.0.0 equality bound", () => {
 });
 
 describe("maxSatisfying: oversized identifiers", () => {
-  it("rejects prerelease identifiers over 250 chars like node-semver", () => {
+  it("rejects full operands over 256 chars like node-semver", () => {
     const big = "b".repeat(251);
     assert.equal(maxSatisfying(VERSIONS, `>=1.0.0-${big}`), null);
     assert.equal(maxSatisfying(VERSIONS, `1.2.3 - 2.0.0-${big}`), null);
     assert.equal(maxSatisfying(VERSIONS, `~1.0.0-${big}`), null);
     assert.equal(maxSatisfying(VERSIONS, `>=1.0.0-${"b".repeat(250)}`), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, `1.2.3 - 2.0.0-${"b".repeat(250)}`), "1.3.0");
+  });
+
+  it("drops oversized prerelease ids on wildcard operands like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, `x.x.x-${"c".repeat(251)}`), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, `x.x.x-${"c".repeat(252)}`), null);
+    assert.equal(maxSatisfying(VERSIONS, `x.x.x-${"9".repeat(257)}`), "2.0.0");
+    assert.equal(maxSatisfying(VERSIONS, `x.x.x-${"9".repeat(258)}`), null);
+  });
+
+  it("rejects leading-zero numeric prerelease ids like node-semver", () => {
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-007"), null);
+    assert.equal(maxSatisfying(VERSIONS, "1.2.3-0.07"), null);
+    assert.equal(maxSatisfying(VERSIONS, "x.x.x-007"), null);
+    assert.equal(maxSatisfying(["1.2.3-01a", "1.2.4"], ">=1.2.0"), "1.2.4");
+    assert.equal(maxSatisfying(["1.2.3-01a"], "1.2.3-01a"), "1.2.3-01a");
+    assert.equal(maxSatisfying(["1.2.3-007"], "*"), null);
+  });
+
+  it("rejects ranges whose computed bounds overflow MAX_SAFE_INTEGER", () => {
+    const max = String(Number.MAX_SAFE_INTEGER);
+    const pool = ["1.0.0", `${max}.0.0`];
+    assert.equal(maxSatisfying(pool, `${max}.x`), null);
+    assert.equal(maxSatisfying(pool, max), null);
+    assert.equal(maxSatisfying(pool, `~${max}`), null);
+    assert.equal(maxSatisfying(pool, `^0.0.${max}`), null);
+    assert.equal(maxSatisfying(pool, `>${max}`), null);
+    assert.equal(maxSatisfying(pool, `<=${max}.x`), null);
+    assert.equal(maxSatisfying(pool, `x - ${max}`), null);
+    assert.equal(maxSatisfying(pool, `${max}.0.0`), `${max}.0.0`);
+    assert.equal(maxSatisfying(pool, `>=${max}.0.0`), `${max}.0.0`);
   });
 });
 
@@ -401,6 +474,13 @@ describe("maxSatisfying: candidate version normalization", () => {
   it("rejects candidate strings over 256 characters", () => {
     const huge = `1.2.3-${"a".repeat(300)}`;
     assert.equal(maxSatisfying([huge, "1.2.3"], "*"), "1.2.3");
+  });
+
+  it("measures the 256-char limit before trimming like node-semver", () => {
+    const padded = `1.2.3 ${" ".repeat(260)}`;
+    assert.equal(maxSatisfying([padded, "1.2.4"], "*"), "1.2.4");
+    const prefixed = `v1.2.3${" ".repeat(251)}`;
+    assert.equal(maxSatisfying([prefixed, "1.2.4"], "*"), "1.2.4");
   });
 
   it("picks the first equal candidate when the range carries build metadata", () => {
