@@ -7,23 +7,34 @@ export type PackageExports =
 export interface AbbreviatedPackument {
   name: string;
   modified?: string;
-  "dist-tags": Record<string, string>;
-  versions: Record<string, NpmPackageVersion>;
+  // Unpublished or partially-tombstoned packages can lack either field.
+  "dist-tags"?: Record<string, string>;
+  versions?: Record<string, NpmPackageVersion>;
+}
+
+/** Legacy license shapes: `{ type, url }` objects and `licenses` arrays. */
+export interface LicenseRef {
+  type?: string;
+  name?: string;
+  url?: string;
 }
 
 export interface NpmPackageVersion {
   name: string;
   version: string;
   description?: string;
-  license?: string;
+  license?: string | LicenseRef | LicenseRef[];
+  /** Deprecated plural form found on old manifests. */
+  licenses?: LicenseRef[];
   homepage?: string;
-  repository?: { type?: string; url?: string } | string;
-  keywords?: string[];
+  repository?: { type?: string; url?: string; directory?: string } | string;
+  keywords?: string[] | string;
   author?: { name?: string; email?: string; url?: string } | string;
-  maintainers?: Array<{ name: string; email?: string }>;
+  maintainers?: Array<{ name?: string; email?: string } | string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   optionalDependencies?: Record<string, string>;
   types?: string;
   typings?: string;
@@ -31,7 +42,7 @@ export interface NpmPackageVersion {
   main?: string;
   module?: string;
   exports?: PackageExports;
-  engines?: Record<string, string>;
+  engines?: Record<string, string> | string | string[];
   deprecated?: string;
   dist?: {
     tarball?: string;
@@ -47,13 +58,21 @@ export interface NpmRegistryResponse {
   "dist-tags"?: Record<string, string>;
   versions?: Record<string, NpmPackageVersion>;
   time?: Record<string, string>;
-  maintainers?: Array<{ name: string; email?: string }>;
+  maintainers?: Array<{ name?: string; email?: string } | string>;
   homepage?: string;
-  keywords?: string[];
+  keywords?: string[] | string;
   repository?: { type?: string; url?: string; directory?: string } | string;
-  license?: string;
+  license?: string | LicenseRef | LicenseRef[];
+  licenses?: LicenseRef[];
   readme?: string;
   readmeFilename?: string;
+}
+
+export interface NpmDownloadsResponse {
+  downloads: number;
+  start: string;
+  end: string;
+  package: string;
 }
 
 export interface NpmSearchResult {
@@ -88,7 +107,7 @@ export interface NpmSearchResult {
 
 export interface NpmsPackageResponse {
   analyzedAt: string;
-  collected: {
+  collected?: {
     metadata: {
       name: string;
       version: string;
@@ -129,28 +148,28 @@ export interface NpmsPackageResponse {
       linters?: string[];
     };
   };
-  score: {
-    final: number;
-    detail: {
-      quality: number;
-      popularity: number;
-      maintenance: number;
+  score?: {
+    final?: number;
+    detail?: {
+      quality?: number;
+      popularity?: number;
+      maintenance?: number;
     };
   };
-  evaluation: {
-    quality: {
+  evaluation?: {
+    quality?: {
       carefulness?: number;
       tests?: number;
       health?: number;
       branding?: number;
     };
-    popularity: {
+    popularity?: {
       communityInterest?: number;
       downloadsCount?: number;
       downloadsAcceleration?: number;
       dependentsCount?: number;
     };
-    maintenance: {
+    maintenance?: {
       releasesFrequency?: number;
       commitsFrequency?: number;
       openIssues?: number;
