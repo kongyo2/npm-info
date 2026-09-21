@@ -8,6 +8,7 @@ import {
   fetchResolvedVersion,
   checkDefinitelyTyped,
   fetchNpmDownloads,
+  fetchGitHubReadme,
 } from "../src/services/npm-api.js";
 
 describe("validatePackageName", () => {
@@ -156,6 +157,28 @@ describe("fetchPackageMetadata", () => {
     assert.equal(calls, 1);
   });
 
+  it("times out while the body is still streaming", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          init?.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError"))
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const pending = fetchPackageMetadata("react");
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(15_000);
+    await assert.rejects(pending, /timed out after 15000ms/);
+  });
+
   it("wraps invalid JSON with a descriptive error", async (t) => {
     t.mock.method(
       globalThis,
@@ -274,5 +297,44 @@ describe("fetchNpmDownloads", () => {
     const d = await fetchNpmDownloads("x");
     assert.equal(d.lastWeek, undefined);
     assert.equal(d.lastMonth?.downloads, 40);
+  });
+});
+
+describe("fetchGitHubReadme", () => {
+  it("falls back to raw.githubusercontent.com when the API is unavailable", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.startsWith("https://api.github.com/")) {
+        return new Response("rate limited", { status: 403 });
+      }
+      if (u.endsWith("/HEAD/Readme.md"))
+        return new Response("# Express", { status: 200 });
+      return new Response("Not Found", { status: 404 });
+    });
+    assert.equal(await fetchGitHubReadme("expressjs", "express"), "# Express");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/expressjs/express/readme",
+      "https://raw.githubusercontent.com/expressjs/express/HEAD/README.md",
+      "https://raw.githubusercontent.com/expressjs/express/HEAD/Readme.md",
+    ]);
+  });
+
+  it("prefers the API response and keeps the monorepo directory", async (t) => {
+    const seen: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      seen.push(String(url));
+      return new Response("# next", { status: 200 });
+    });
+    assert.equal(await fetchGitHubReadme("vercel", "next.js", "packages/next"), "# next");
+    assert.deepEqual(seen, [
+      "https://api.github.com/repos/vercel/next.js/readme/packages/next",
+    ]);
+  });
+
+  it("returns null when every source fails", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response("nope", { status: 404 }));
+    assert.equal(await fetchGitHubReadme("o", "r"), null);
   });
 });

@@ -4,6 +4,7 @@ import {
   NPMS_API_URL,
   NPM_DOWNLOADS_API_URL,
   GITHUB_API_URL,
+  GITHUB_RAW_URL,
   USER_AGENT,
   DEFAULT_REQUEST_TIMEOUT,
   TYPES_CHECK_TIMEOUT,
@@ -57,17 +58,23 @@ export class HttpError extends Error {
 const RETRYABLE_STATUSES = new Set([429, 503]);
 const MAX_RETRY_WAIT_MS = 10_000;
 
-async function fetchOnce(
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+async function fetchOnce<T>(
   url: string,
   timeout: number,
-  headers: Record<string, string>
-): Promise<Response> {
+  headers: Record<string, string>,
+  consume: (response: Response) => Promise<T>
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    return await fetch(url, { signal: controller.signal, headers });
+    const response = await fetch(url, { signal: controller.signal, headers });
+    return await consume(response);
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (isAbortError(error)) {
       throw new Error(
         `Request timed out after ${timeout}ms. The remote service may be slow or unreachable — try again later.`,
         { cause: error }
@@ -79,22 +86,37 @@ async function fetchOnce(
   }
 }
 
-async function fetchWithTimeout(
-  url: string,
-  timeout: number = DEFAULT_REQUEST_TIMEOUT,
-  headers: Record<string, string> = { Accept: "application/json" }
-): Promise<Response> {
-  const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
-  const first = await fetchOnce(url, timeout, merged);
-  if (!RETRYABLE_STATUSES.has(first.status)) return first;
+function retryDelayMs(retryAfter: string | null): number {
+  const seconds = Number(retryAfter);
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.min(seconds * 1000, MAX_RETRY_WAIT_MS)
+    : 1000;
+}
 
-  const retryAfter = Number(first.headers.get("retry-after"));
-  const waitMs =
-    Number.isFinite(retryAfter) && retryAfter > 0
-      ? Math.min(retryAfter * 1000, MAX_RETRY_WAIT_MS)
-      : 1000;
-  await delay(waitMs);
-  return fetchOnce(url, timeout, merged);
+async function fetchWithTimeout<T>(
+  url: string,
+  consume: (response: Response) => Promise<T>,
+  timeout: number = DEFAULT_REQUEST_TIMEOUT,
+  headers: Record<string, string> = {}
+): Promise<T> {
+  const merged = { Accept: "application/json", "User-Agent": USER_AGENT, ...headers };
+  type Attempt = { done: true; value: T } | { done: false; retryAfter: string | null };
+  const first = await fetchOnce(
+    url,
+    timeout,
+    merged,
+    async (response): Promise<Attempt> => {
+      if (!RETRYABLE_STATUSES.has(response.status)) {
+        return { done: true, value: await consume(response) };
+      }
+      await response.body?.cancel();
+      return { done: false, retryAfter: response.headers.get("retry-after") };
+    }
+  );
+  if (first.done) return first.value;
+
+  await delay(retryDelayMs(first.retryAfter));
+  return fetchOnce(url, timeout, merged, consume);
 }
 
 async function fetchJson<T>(
@@ -103,17 +125,24 @@ async function fetchJson<T>(
   timeout?: number,
   headers?: Record<string, string>
 ): Promise<T> {
-  const response = await fetchWithTimeout(url, timeout, headers);
-  if (!response.ok) {
-    throw new HttpError(describeFailure(response.status), response.status);
-  }
-  try {
-    return (await response.json()) as T;
-  } catch (error) {
-    throw new Error(`Invalid JSON in the response from ${new URL(url).hostname}.`, {
-      cause: error,
-    });
-  }
+  return fetchWithTimeout(
+    url,
+    async (response) => {
+      if (!response.ok) {
+        throw new HttpError(describeFailure(response.status), response.status);
+      }
+      try {
+        return (await response.json()) as T;
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new Error(`Invalid JSON in the response from ${new URL(url).hostname}.`, {
+          cause: error,
+        });
+      }
+    },
+    timeout,
+    headers
+  );
 }
 
 export async function fetchPackageMetadata(
@@ -212,20 +241,25 @@ export async function checkDefinitelyTyped(
 ): Promise<DefinitelyTypedResult> {
   const typesName = typesPackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(typesName)}/latest`;
-  const response = await fetchWithTimeout(url, TYPES_CHECK_TIMEOUT);
-  if (response.ok) {
-    const data = (await response.json()) as NpmPackageVersion;
-    return {
-      exists: true,
-      version: data.version,
-      deprecated: typeof data.deprecated === "string" ? data.deprecated : undefined,
-    };
-  }
-  if (response.status === 404) {
-    return { exists: false };
-  }
-  throw new Error(
-    `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
+  return fetchWithTimeout(
+    url,
+    async (response) => {
+      if (response.ok) {
+        const data = (await response.json()) as NpmPackageVersion;
+        return {
+          exists: true,
+          version: data.version,
+          deprecated: typeof data.deprecated === "string" ? data.deprecated : undefined,
+        };
+      }
+      if (response.status === 404) {
+        return { exists: false };
+      }
+      throw new Error(
+        `Failed to check @types package "${typesName}": registry returned status ${response.status}. Try again later.`
+      );
+    },
+    TYPES_CHECK_TIMEOUT
   );
 }
 
@@ -273,23 +307,47 @@ export function extractGitHubRepo(
   return result;
 }
 
+const RAW_README_NAMES = ["README.md", "Readme.md", "readme.md"];
+
+async function fetchText(
+  url: string,
+  headers?: Record<string, string>
+): Promise<string | null> {
+  try {
+    return await fetchWithTimeout(
+      url,
+      (response) => (response.ok ? response.text() : Promise.resolve(null)),
+      DEFAULT_REQUEST_TIMEOUT,
+      headers
+    );
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchGitHubReadme(
   owner: string,
   repo: string,
   directory?: string
 ): Promise<string | null> {
-  let url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`;
-  if (directory) {
-    url += `/${directory.split("/").map(encodeURIComponent).join("/")}`;
-  }
-  try {
-    const response = await fetchWithTimeout(url, DEFAULT_REQUEST_TIMEOUT, {
+  const ownerRepo = `${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const dirPath = directory
+    ? `/${directory.split("/").map(encodeURIComponent).join("/")}`
+    : "";
+  const fromApi = await fetchText(
+    `${GITHUB_API_URL}/repos/${ownerRepo}/readme${dirPath}`,
+    {
       Accept: "application/vnd.github.raw",
-      "User-Agent": USER_AGENT,
-    });
-    if (!response.ok) return null;
-    return await response.text();
-  } catch {
-    return null;
-  }
+    }
+  );
+  if (fromApi !== null) return fromApi;
+
+  return RAW_README_NAMES.reduce<Promise<string | null>>(
+    (found, name) =>
+      found.then(
+        (text) =>
+          text ?? fetchText(`${GITHUB_RAW_URL}/${ownerRepo}/HEAD${dirPath}/${name}`)
+      ),
+    Promise.resolve(null)
+  );
 }
