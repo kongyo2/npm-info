@@ -396,6 +396,48 @@ describe("fetchResolvedVersion", () => {
     assert.equal(v.version, "1.5.0");
   });
 
+  it("falls back to range resolution on other 4xx statuses", async (t) => {
+    const packument = packumentFor(["1.0.0", "4.1.0", "4.2.0", "5.0.0"]);
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      if (u.endsWith("/pkg/4.2.0")) {
+        return jsonResponse({ name: "pkg", version: "4.2.0" });
+      }
+      return jsonResponse("not allowed", { status: 405 });
+    });
+    const v = await fetchResolvedVersion("pkg", ">=4 <5");
+    assert.equal(v.version, "4.2.0");
+  });
+
+  it("resolves dist-tags from the packument when the direct lookup fails", async (t) => {
+    const packument = {
+      ...packumentFor(["1.0.0", "2.0.0-rc.1"]),
+      "dist-tags": { latest: "1.0.0", beta: "2.0.0-rc.1" },
+    };
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) return jsonResponse(packument);
+      if (u.endsWith("/pkg/2.0.0-rc.1")) {
+        return jsonResponse({ name: "pkg", version: "2.0.0-rc.1" });
+      }
+      return jsonResponse("version not found", { status: 404 });
+    });
+    const v = await fetchResolvedVersion("pkg", "beta");
+    assert.equal(v.version, "2.0.0-rc.1");
+  });
+
+  it("tolerates non-object dist-tags and versions maps in the fallback", async (t) => {
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      const u = String(url);
+      if (u.endsWith("/pkg")) {
+        return jsonResponse({ name: "pkg", "dist-tags": "latest", versions: "1.0.0" });
+      }
+      return jsonResponse("version not found", { status: 404 });
+    });
+    await assert.rejects(fetchResolvedVersion("pkg", "^1"), /No published version/);
+  });
+
   it("errors when no published version satisfies the range", async (t) => {
     const packument = packumentFor(["1.0.0", "1.5.0"]);
     t.mock.method(globalThis, "fetch", async (url: unknown) => {
@@ -434,6 +476,16 @@ describe("checkDefinitelyTyped", () => {
     assert.equal(result.exists, true);
     assert.equal(result.version, "1.0.0");
     assert.match(result.deprecated ?? "", /stub types definition/);
+  });
+
+  it("rejects invalid package names before any request", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return jsonResponse({});
+    });
+    await assert.rejects(checkDefinitelyTyped("a/b/c"), /Invalid package name/);
+    assert.equal(calls, 0);
   });
 
   it("returns exists:false on 404", async (t) => {

@@ -5,7 +5,7 @@ import { createLimiter } from "../services/concurrency.js";
 import { PACKAGE_NAME_REGEX } from "../constants.js";
 import { maxSatisfying } from "../services/semver.js";
 import type { AbbreviatedPackument, NpmPackageVersion } from "../types.js";
-import { errorMessage, errorResult, textResult } from "./shared.js";
+import { errorMessage, errorResult, recordOf, textResult } from "./shared.js";
 
 const DependenciesInputSchema = {
   package_name: z
@@ -179,12 +179,14 @@ export async function resolveProductionTree(
       return;
     }
 
-    const versions = pkg.versions ?? {};
+    const versions = recordOf<NpmPackageVersion>(pkg.versions) ?? {};
+    const distTags = recordOf<string>(pkg["dist-tags"]);
+    const tagged = distTags?.[versionHint];
     let resolvedVersion: string | null;
     if (versions[versionHint]) {
       resolvedVersion = versionHint;
-    } else if (pkg["dist-tags"]?.[versionHint]) {
-      resolvedVersion = pkg["dist-tags"][versionHint];
+    } else if (typeof tagged === "string" && tagged) {
+      resolvedVersion = tagged;
     } else {
       resolvedVersion = maxSatisfying(Object.keys(versions), versionHint);
     }

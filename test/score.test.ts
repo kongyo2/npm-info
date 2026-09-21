@@ -109,7 +109,21 @@ describe("formatScoreReport", () => {
       now: NOW,
     }).join("\n");
     assert.match(text, /\*\*Overall Score:\*\* N\/A/);
-    assert.ok(STALE_AFTER_DAYS > 0);
+  });
+
+  it("warns exactly when the analysis is older than the staleness threshold", () => {
+    const report = (daysAgo: number): string =>
+      formatScoreReport({
+        packageName: "pkg",
+        npms: {
+          analyzedAt: new Date(NOW - daysAgo * 86_400_000).toISOString(),
+          score: { final: 0.5 },
+        },
+        downloads: {},
+        now: NOW,
+      }).join("\n");
+    assert.doesNotMatch(report(STALE_AFTER_DAYS), /index is frozen/);
+    assert.match(report(STALE_AFTER_DAYS + 1), /index is frozen/);
   });
 
   it("renders N/A rather than crashing on non-finite metrics", () => {

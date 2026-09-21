@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchPackageMetadata } from "../services/npm-api.js";
 import { DEFAULT_VERSIONS_LIMIT } from "../constants.js";
 import type { NpmRegistryResponse } from "../types.js";
-import { errorResult, textResult } from "./shared.js";
+import { errorResult, recordOf, textResult } from "./shared.js";
 
 const VersionsInputSchema = {
   package_name: z
@@ -46,7 +46,9 @@ export function collectVersionRows(
   const total = Object.keys(allVersions).length;
 
   const tagLookup = new Map<string, string[]>();
-  for (const [tag, ver] of Object.entries(metadata["dist-tags"] ?? {})) {
+  for (const [tag, ver] of Object.entries(
+    recordOf<string>(metadata["dist-tags"]) ?? {}
+  )) {
     if (typeof ver !== "string") continue;
     const existing = tagLookup.get(ver) ?? [];
     existing.push(tag);

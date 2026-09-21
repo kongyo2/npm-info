@@ -13,6 +13,12 @@ export function errorResult(error: unknown): CallToolResult {
   };
 }
 
+export function recordOf<T>(value: unknown): Record<string, T> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, T>)
+    : undefined;
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

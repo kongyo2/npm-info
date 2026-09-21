@@ -86,6 +86,13 @@ describe("collectVersionRows", () => {
     assert.deepEqual(rows[0].tags, ["latest"]);
   });
 
+  it("tolerates a non-object dist-tags map", () => {
+    const meta = metadata(["1.0.0"], { "1.0.0": "2020-01-01" });
+    meta["dist-tags"] = "latest" as never;
+    const { rows } = collectVersionRows(meta, 20);
+    assert.deepEqual(rows[0].tags, []);
+  });
+
   it("tolerates non-object versions/time fields", () => {
     const meta = {
       name: "pkg",

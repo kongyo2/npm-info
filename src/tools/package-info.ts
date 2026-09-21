@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { extractGitHubRepo, fetchPackageMetadata } from "../services/npm-api.js";
 import { detectTypesEntry } from "./types-check.js";
 import type { LicenseRef, NpmPackageVersion, NpmRegistryResponse } from "../types.js";
-import { errorResult, textResult } from "./shared.js";
+import { errorResult, recordOf, textResult } from "./shared.js";
 
 const PackageInfoInputSchema = {
   package_name: z
@@ -143,9 +143,11 @@ Examples:
     async ({ package_name }) => {
       try {
         const metadata = await fetchPackageMetadata(package_name);
-        const latestTagRaw = metadata["dist-tags"]?.latest;
+        const distTags = recordOf<string>(metadata["dist-tags"]);
+        const latestTagRaw = distTags?.latest;
         const latestTag = typeof latestTagRaw === "string" ? latestTagRaw : undefined;
-        const latestCandidate = latestTag ? metadata.versions?.[latestTag] : undefined;
+        const versions = recordOf<NpmPackageVersion>(metadata.versions);
+        const latestCandidate = latestTag ? versions?.[latestTag] : undefined;
         const latestVersion =
           latestCandidate && typeof latestCandidate === "object"
             ? latestCandidate
@@ -183,8 +185,8 @@ Examples:
         const keywords = formatKeywords(metadata.keywords);
         if (keywords) lines.push(`**Keywords:** ${keywords}`);
 
-        if (metadata["dist-tags"]) {
-          const tags = Object.entries(metadata["dist-tags"])
+        if (distTags) {
+          const tags = Object.entries(distTags)
             .filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")
             .map(([tag, ver]) => `${tag}: ${ver}`)
             .join(", ");

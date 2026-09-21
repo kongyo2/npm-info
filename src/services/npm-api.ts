@@ -201,10 +201,23 @@ export async function fetchResolvedVersion(
   try {
     return await fetchPackageVersion(packageName, requested);
   } catch (error) {
-    if (!(error instanceof HttpError) || error.status !== 404) throw error;
+    if (!(error instanceof HttpError) || error.status >= 500) throw error;
 
     const packument = await fetchAbbreviatedPackument(packageName);
-    const resolved = maxSatisfying(Object.keys(packument.versions ?? {}), requested);
+    const distTags = packument["dist-tags"];
+    const tagged =
+      distTags && typeof distTags === "object" && !Array.isArray(distTags)
+        ? distTags[requested]
+        : undefined;
+    const versions = packument.versions;
+    const versionKeys =
+      versions && typeof versions === "object" && !Array.isArray(versions)
+        ? Object.keys(versions)
+        : [];
+    const resolved =
+      typeof tagged === "string" && tagged
+        ? tagged
+        : maxSatisfying(versionKeys, requested);
     if (!resolved) {
       throw new Error(
         `No published version of "${packageName}" satisfies "${requested}". Use npm_package_versions to see available versions.`,
@@ -246,6 +259,7 @@ export interface DefinitelyTypedResult {
 export async function checkDefinitelyTyped(
   packageName: string
 ): Promise<DefinitelyTypedResult> {
+  validatePackageName(packageName);
   const typesName = typesPackageName(packageName);
   const url = `${NPM_REGISTRY_URL}/${encodePackageName(typesName)}/latest`;
   return fetchWithTimeout(

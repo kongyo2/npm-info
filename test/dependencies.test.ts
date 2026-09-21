@@ -156,6 +156,18 @@ function stubRegistry(
 }
 
 describe("resolveProductionTree", () => {
+  it("treats non-object dist-tags and versions maps as empty", async (t) => {
+    stubRegistry(t, {
+      root: { name: "root", "dist-tags": "latest", versions: "1.0.0" } as never,
+    });
+    const result = await resolveProductionTree("root", "latest", 2);
+    assert.equal(result.tree["root@latest"], undefined);
+    assert.match(
+      result.warnings.join("\n"),
+      /No published version of root satisfies 'latest'/
+    );
+  });
+
   it("resolves a transitive tree and dedups in-flight packument fetches", async (t) => {
     const fixtures = {
       root: packument("root", { "1.0.0": { a: "^1.0.0", b: "^1.0.0" } }),

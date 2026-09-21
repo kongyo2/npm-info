@@ -187,6 +187,30 @@ describe("formatMaintainer", () => {
 });
 
 describe("npm_package_info handler", () => {
+  it("ignores non-object dist-tags and versions maps", async (t) => {
+    type Handler = (args: {
+      package_name: string;
+    }) => Promise<{ content: { text: string }[] }>;
+    let handler: Handler | undefined;
+    registerPackageInfoTool({
+      registerTool: (_name: string, _spec: unknown, h: Handler) => {
+        handler = h;
+      },
+    } as unknown as McpServer);
+    assert.ok(handler);
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({ name: "pkg", "dist-tags": "latest", versions: "not-a-map" }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    const res = await handler({ package_name: "pkg" });
+    assert.doesNotMatch(res.content[0].text, /Dist-tags|Latest Version|object Object/);
+  });
+
   it("does not print a non-string deprecated marker", async (t) => {
     type Handler = (args: {
       package_name: string;
