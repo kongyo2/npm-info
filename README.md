@@ -10,15 +10,15 @@ npm パッケージ情報を提供する MCP サーバー。AI エージェン�
 
 ## Tools
 
-| Tool                       | Description                                  |
-| -------------------------- | -------------------------------------------- |
-| `npm_search`               | Search packages                              |
-| `npm_package_info`         | Get package details                          |
-| `npm_package_versions`     | List versions                                |
-| `npm_package_dependencies` | Get dependencies                             |
-| `npm_package_readme`       | Fetch README                                 |
-| `npm_package_types`        | Check TypeScript type definitions            |
-| `npm_package_score`        | Get quality / popularity / maintenance score |
+| Tool                       | Description                                  | Parameters                                                                                                                                              |
+| -------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm_search`               | Search packages                              | `query`, `limit` (1-30, default 10)                                                                                                                     |
+| `npm_package_info`         | Get package details                          | `package_name`                                                                                                                                          |
+| `npm_package_versions`     | List versions                                | `package_name`, `limit` (1-100, default 20)                                                                                                             |
+| `npm_package_dependencies` | Get dependencies                             | `package_name`, `version` (version, dist-tag, or range), `depth` (1-5, default 1), `include_dev`, `include_peer`, `include_optional` (all default true) |
+| `npm_package_readme`       | Fetch README                                 | `package_name`                                                                                                                                          |
+| `npm_package_types`        | Check TypeScript type definitions            | `package_name`, `version` (version, dist-tag, or range)                                                                                                 |
+| `npm_package_score`        | Get quality / popularity / maintenance score | `package_name`                                                                                                                                          |
 
 ## Setup
 
