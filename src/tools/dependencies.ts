@@ -110,7 +110,7 @@ export interface TreeBudget {
 }
 
 export const DEFAULT_TREE_BUDGET: TreeBudget = {
-  maxPackages: 400,
+  maxPackages: 200,
   timeLimitMs: 20_000,
 };
 
