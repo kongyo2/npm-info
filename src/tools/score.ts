@@ -254,14 +254,19 @@ Examples:
         const is404 = npmsRes.error instanceof HttpError && npmsRes.error.status === 404;
         let registryMeta: { latest?: string; modified?: string } | undefined;
         if (is404) {
-          const packument = await fetchAbbreviatedPackument(package_name).catch(
-            () => undefined
-          );
-          if (!packument) return errorResult(npmsRes.error);
-          registryMeta = {
-            latest: packument["dist-tags"]?.latest,
-            modified: packument.modified,
-          };
+          try {
+            const packument = await fetchAbbreviatedPackument(package_name);
+            registryMeta = {
+              latest: packument["dist-tags"]?.latest,
+              modified: packument.modified,
+            };
+          } catch (fetchErr) {
+            return errorResult(
+              fetchErr instanceof HttpError && fetchErr.status === 404
+                ? fetchErr
+                : npmsRes.error
+            );
+          }
         }
         const hasDownloads = !!(downloads.lastWeek || downloads.lastMonth);
         if (!is404 && !hasDownloads) return errorResult(npmsRes.error);

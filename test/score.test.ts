@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { daysSince, formatScoreReport, STALE_AFTER_DAYS } from "../src/tools/score.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  daysSince,
+  formatScoreReport,
+  registerScoreTool,
+  STALE_AFTER_DAYS,
+} from "../src/tools/score.js";
 import type { NpmsPackageResponse } from "../src/types.js";
 
 const NOW = Date.parse("2026-01-01T00:00:00Z");
@@ -115,5 +121,29 @@ describe("formatScoreReport", () => {
     }).join("\n");
     assert.doesNotMatch(text, /undefined/);
     assert.doesNotMatch(text, /\*\*Analyzed:\*\*/);
+  });
+});
+
+describe("npm_package_score handler", () => {
+  it("reports the npm 404 when the package exists nowhere", async (t) => {
+    type Handler = (args: { package_name: string }) => Promise<{
+      content: { text: string }[];
+      isError?: boolean;
+    }>;
+    let handler: Handler | undefined;
+    registerScoreTool({
+      registerTool: (_name: string, _spec: unknown, h: Handler) => {
+        handler = h;
+      },
+    } as unknown as McpServer);
+    assert.ok(handler);
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () => new Response("not found", { status: 404 })
+    );
+    const res = await handler({ package_name: "nope-not-real" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /not found on npm/);
   });
 });
