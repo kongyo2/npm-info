@@ -44,18 +44,20 @@ function formatScoreLine(
 }
 
 export function formatSearchResults(query: string, result: NpmSearchResult): string[] {
-  if (result.total === 0 || result.objects.length === 0) {
+  const objects = Array.isArray(result.objects) ? result.objects : [];
+  const total = typeof result.total === "number" ? result.total : objects.length;
+  if (total === 0 || objects.length === 0) {
     return [`No packages found matching "${query}". Try broader search terms.`];
   }
 
   const lines: string[] = [
     `# npm Search Results: "${query}"`,
     "",
-    `Found ${result.total} packages (showing ${result.objects.length})`,
+    `Found ${total} packages (showing ${objects.length})`,
     "",
   ];
 
-  for (const obj of result.objects) {
+  for (const obj of objects) {
     const pkg = obj.package;
     if (!pkg?.name) continue;
     lines.push(pkg.version ? `## ${pkg.name} (v${pkg.version})` : `## ${pkg.name}`);

@@ -77,4 +77,11 @@ describe("formatSearchResults", () => {
     assert.doesNotMatch(text, /NaN|undefined/);
     assert.doesNotMatch(text, /\*\*Score:\*\*\s*$/m);
   });
+
+  it("tolerates a missing objects array", () => {
+    const lines = formatSearchResults("q", {
+      total: 3,
+    } as unknown as NpmSearchResult);
+    assert.match(lines[0], /No packages found matching "q"/);
+  });
 });
