@@ -1,11 +1,22 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { fetchNpmsScore } from "../services/npm-api.js";
-import { errorResult, textResult } from "./shared.js";
+import {
+  fetchNpmDownloads,
+  fetchNpmsScore,
+  fetchPackageMetadata,
+  HttpError,
+} from "../services/npm-api.js";
+import { errorMessage, errorResult, textResult } from "./shared.js";
+import type {
+  NpmDownloadsResponse,
+  NpmRegistryResponse,
+  NpmsPackageResponse,
+} from "../types.js";
 
 const ScoreInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
 };
@@ -29,14 +40,186 @@ function windowDays(from: string, to: string): number | null {
   return Math.round((end - start) / MS_PER_DAY);
 }
 
+/**
+ * Whole days since an ISO timestamp — used to flag npms.io analyses that are
+ * too old to trust (npms.io's public index stopped updating in early 2023).
+ */
+export function daysSince(iso: string, now: number = Date.now()): number | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return Math.floor((now - ms) / MS_PER_DAY);
+}
+
+/** Data staleness threshold for the npms.io score. */
+export const STALE_AFTER_DAYS = 180;
+
+export interface ScoreReportInput {
+  packageName: string;
+  /** npms.io analysis, or null when npms has none / failed. */
+  npms: NpmsPackageResponse | null;
+  /** Human-readable npms.io failure (non-404), when it happened. */
+  npmsError?: string;
+  /** npm registry metadata used to frame the no-score fallback report. */
+  registryMeta?: NpmRegistryResponse;
+  downloads: {
+    lastWeek?: NpmDownloadsResponse;
+    lastMonth?: NpmDownloadsResponse;
+  };
+  /** Injectable clock for tests. */
+  now?: number;
+}
+
+/** Pure renderer for npm_package_score output — exported for tests. */
+export function formatScoreReport(input: ScoreReportInput): string[] {
+  const { packageName, npms, npmsError, registryMeta, downloads, now } = input;
+  const lines: string[] = [`# ${packageName} - Package Score`, ""];
+
+  if (npms) {
+    lines.push(`**Overall Score:** ${pct(npms.score?.final)}`);
+    if (npms.score?.detail) {
+      const detail = npms.score.detail;
+      lines.push(
+        "",
+        "## Score Breakdown",
+        "",
+        "| Category | Score |",
+        "|----------|-------|",
+        `| Quality | ${pct(detail.quality)} |`,
+        `| Popularity | ${pct(detail.popularity)} |`,
+        `| Maintenance | ${pct(detail.maintenance)} |`
+      );
+    }
+    lines.push("");
+
+    const ev = npms.evaluation;
+    if (ev?.quality) {
+      lines.push("## Quality Details");
+      lines.push("");
+      if (ev.quality.carefulness !== undefined)
+        lines.push(`- **Carefulness:** ${pct(ev.quality.carefulness)}`);
+      if (ev.quality.tests !== undefined)
+        lines.push(`- **Tests:** ${pct(ev.quality.tests)}`);
+      if (ev.quality.health !== undefined)
+        lines.push(`- **Health:** ${pct(ev.quality.health)}`);
+      if (ev.quality.branding !== undefined)
+        lines.push(`- **Branding:** ${pct(ev.quality.branding)}`);
+      lines.push("");
+    }
+
+    if (ev?.popularity) {
+      lines.push("## Popularity Details");
+      lines.push("");
+      if (ev.popularity.communityInterest !== undefined)
+        lines.push(`- **Community Interest:** ${num(ev.popularity.communityInterest)}`);
+      if (ev.popularity.downloadsCount !== undefined)
+        lines.push(
+          `- **Downloads (30d, at analysis time):** ${num(ev.popularity.downloadsCount)}`
+        );
+      if (ev.popularity.downloadsAcceleration !== undefined)
+        lines.push(
+          `- **Download Acceleration:** ${ev.popularity.downloadsAcceleration.toFixed(1)}`
+        );
+      if (ev.popularity.dependentsCount !== undefined)
+        lines.push(`- **Dependents:** ${num(ev.popularity.dependentsCount)}`);
+      lines.push("");
+    }
+
+    if (ev?.maintenance) {
+      lines.push("## Maintenance Details");
+      lines.push("");
+      if (ev.maintenance.releasesFrequency !== undefined)
+        lines.push(`- **Release Frequency:** ${pct(ev.maintenance.releasesFrequency)}`);
+      if (ev.maintenance.commitsFrequency !== undefined)
+        lines.push(`- **Commit Frequency:** ${pct(ev.maintenance.commitsFrequency)}`);
+      if (ev.maintenance.openIssues !== undefined)
+        lines.push(`- **Open Issues:** ${pct(ev.maintenance.openIssues)}`);
+      if (ev.maintenance.issuesDistribution !== undefined)
+        lines.push(`- **Issue Resolution:** ${pct(ev.maintenance.issuesDistribution)}`);
+      lines.push("");
+    }
+
+    const collectedDownloads = npms.collected?.npm?.downloads;
+    if (collectedDownloads?.length) {
+      lines.push("## Download Statistics (at analysis time)");
+      lines.push("");
+      for (const window of collectedDownloads) {
+        const days = windowDays(window.from, window.to);
+        const label =
+          days === null ? `${window.from} – ${window.to}` : `Last ${days} days`;
+        lines.push(`- **${label}:** ${num(window.count)}`);
+      }
+      lines.push("");
+    }
+
+    if (npms.collected?.github) {
+      const gh = npms.collected.github;
+      lines.push("## GitHub Stats");
+      lines.push("");
+      if (gh.starsCount !== undefined) lines.push(`- **Stars:** ${num(gh.starsCount)}`);
+      if (gh.forksCount !== undefined) lines.push(`- **Forks:** ${num(gh.forksCount)}`);
+      if (gh.issues?.openCount !== undefined)
+        lines.push(`- **Open Issues:** ${num(gh.issues.openCount)}`);
+      if (gh.subscribersCount !== undefined)
+        lines.push(`- **Watchers:** ${num(gh.subscribersCount)}`);
+      lines.push("");
+    }
+  } else if (npmsError) {
+    lines.push(
+      `> **Note:** npms.io scoring is unavailable right now (${npmsError}).`,
+      ""
+    );
+  } else {
+    lines.push(
+      "**npms.io:** no analysis available — its public index has been frozen since early 2023, so packages created or updated since then are unscored."
+    );
+    if (registryMeta) {
+      const latest = registryMeta["dist-tags"]?.latest;
+      const parts = [
+        latest ? `latest ${latest}` : undefined,
+        registryMeta.time?.modified ? `updated ${registryMeta.time.modified}` : undefined,
+      ].filter(Boolean);
+      if (parts.length > 0) lines.push(`**Registry:** ${parts.join(", ")}`);
+    }
+    lines.push("");
+  }
+
+  const { lastWeek, lastMonth } = downloads;
+  if (lastWeek || lastMonth) {
+    lines.push("## npm Downloads (live)");
+    lines.push("");
+    if (lastWeek) lines.push(`- **Last 7 days:** ${num(lastWeek.downloads)}`);
+    if (lastMonth) lines.push(`- **Last 30 days:** ${num(lastMonth.downloads)}`);
+    lines.push("");
+  }
+
+  if (npms) {
+    const age = daysSince(npms.analyzedAt, now);
+    lines.push(
+      `**Analyzed:** ${npms.analyzedAt}${age !== null && age >= 0 ? ` (${age} days ago)` : ""}`
+    );
+    if (age !== null && age > STALE_AFTER_DAYS) {
+      lines.push(
+        "",
+        `> **Note:** this analysis is over ${STALE_AFTER_DAYS} days old — npms.io's index is frozen, so the scores above may badly lag the package's current state. The live download counts are current.`
+      );
+    }
+  }
+
+  return lines;
+}
+
 export function registerScoreTool(server: McpServer): void {
   server.registerTool(
     "npm_package_score",
     {
       title: "Get npm Package Score",
-      description: `Get quality, popularity, and maintenance scores for an npm package from npms.io.
+      description: `Get quality, popularity, and maintenance scores for an npm package from npms.io, plus live npm download counts.
 
 Provides detailed metrics including download counts, GitHub stars, test coverage indicators, and release frequency.
+
+Note: npms.io's public index has been frozen since early 2023, so scores can
+be stale and recently-published packages may have no npms analysis at all —
+in that case the report falls back to live registry/download data.
 
 Args:
   - package_name (string): The npm package name
@@ -48,7 +231,7 @@ Returns:
   - Popularity: community interest, downloads, dependents
   - Maintenance: release frequency, commit frequency, open issues
   - GitHub stats: stars, forks, issues
-  - Download statistics
+  - Download statistics (npms at analysis time + live npm counts)
 
 Examples:
   - "react" -> High scores across all categories
@@ -63,105 +246,44 @@ Examples:
     },
     async ({ package_name }) => {
       try {
-        const data = await fetchNpmsScore(package_name);
+        const [npmsRes, downloads] = await Promise.all([
+          fetchNpmsScore(package_name).then(
+            (data) => ({ data, error: undefined as unknown }),
+            (error) => ({ data: undefined, error })
+          ),
+          fetchNpmDownloads(package_name),
+        ]);
 
-        const lines: string[] = [
-          `# ${package_name} - Package Score`,
-          "",
-          `**Overall Score:** ${pct(data.score.final)}`,
-          "",
-          "## Score Breakdown",
-          "",
-          `| Category | Score |`,
-          `|----------|-------|`,
-          `| Quality | ${pct(data.score.detail.quality)} |`,
-          `| Popularity | ${pct(data.score.detail.popularity)} |`,
-          `| Maintenance | ${pct(data.score.detail.maintenance)} |`,
-          "",
-        ];
-
-        const ev = data.evaluation;
-        if (ev.quality) {
-          lines.push("## Quality Details");
-          lines.push("");
-          if (ev.quality.carefulness !== undefined)
-            lines.push(`- **Carefulness:** ${pct(ev.quality.carefulness)}`);
-          if (ev.quality.tests !== undefined)
-            lines.push(`- **Tests:** ${pct(ev.quality.tests)}`);
-          if (ev.quality.health !== undefined)
-            lines.push(`- **Health:** ${pct(ev.quality.health)}`);
-          if (ev.quality.branding !== undefined)
-            lines.push(`- **Branding:** ${pct(ev.quality.branding)}`);
-          lines.push("");
+        if (npmsRes.data) {
+          return textResult(
+            formatScoreReport({
+              packageName: package_name,
+              npms: npmsRes.data,
+              downloads,
+            })
+          );
         }
 
-        if (ev.popularity) {
-          lines.push("## Popularity Details");
-          lines.push("");
-          if (ev.popularity.communityInterest !== undefined)
-            lines.push(
-              `- **Community Interest:** ${num(ev.popularity.communityInterest)}`
-            );
-          if (ev.popularity.downloadsCount !== undefined)
-            lines.push(`- **Downloads (30d):** ${num(ev.popularity.downloadsCount)}`);
-          if (ev.popularity.downloadsAcceleration !== undefined)
-            lines.push(
-              `- **Download Acceleration:** ${ev.popularity.downloadsAcceleration.toFixed(1)}`
-            );
-          if (ev.popularity.dependentsCount !== undefined)
-            lines.push(`- **Dependents:** ${num(ev.popularity.dependentsCount)}`);
-          lines.push("");
+        const is404 = npmsRes.error instanceof HttpError && npmsRes.error.status === 404;
+        let registryMeta: NpmRegistryResponse | undefined;
+        if (is404) {
+          // npms.io 404 today usually means "index frozen before this package
+          // existed" — confirm the package itself exists before reporting it.
+          registryMeta = await fetchPackageMetadata(package_name).catch(() => undefined);
+          if (!registryMeta) return errorResult(npmsRes.error);
         }
+        const hasDownloads = !!(downloads.lastWeek || downloads.lastMonth);
+        if (!is404 && !hasDownloads) return errorResult(npmsRes.error);
 
-        if (ev.maintenance) {
-          lines.push("## Maintenance Details");
-          lines.push("");
-          if (ev.maintenance.releasesFrequency !== undefined)
-            lines.push(
-              `- **Release Frequency:** ${pct(ev.maintenance.releasesFrequency)}`
-            );
-          if (ev.maintenance.commitsFrequency !== undefined)
-            lines.push(`- **Commit Frequency:** ${pct(ev.maintenance.commitsFrequency)}`);
-          if (ev.maintenance.openIssues !== undefined)
-            lines.push(`- **Open Issues:** ${pct(ev.maintenance.openIssues)}`);
-          if (ev.maintenance.issuesDistribution !== undefined)
-            lines.push(
-              `- **Issue Resolution:** ${pct(ev.maintenance.issuesDistribution)}`
-            );
-          lines.push("");
-        }
-
-        const downloads = data.collected.npm?.downloads;
-        if (downloads?.length) {
-          lines.push("## Download Statistics");
-          lines.push("");
-          for (const window of downloads) {
-            const days = windowDays(window.from, window.to);
-            const label =
-              days === null ? `${window.from} – ${window.to}` : `Last ${days} days`;
-            lines.push(`- **${label}:** ${num(window.count)}`);
-          }
-          lines.push("");
-        }
-
-        if (data.collected.github) {
-          const gh = data.collected.github;
-          lines.push("## GitHub Stats");
-          lines.push("");
-          if (gh.starsCount !== undefined)
-            lines.push(`- **Stars:** ${num(gh.starsCount)}`);
-          if (gh.forksCount !== undefined)
-            lines.push(`- **Forks:** ${num(gh.forksCount)}`);
-          if (gh.issues?.openCount !== undefined)
-            lines.push(`- **Open Issues:** ${num(gh.issues.openCount)}`);
-          if (gh.subscribersCount !== undefined)
-            lines.push(`- **Watchers:** ${num(gh.subscribersCount)}`);
-          lines.push("");
-        }
-
-        lines.push(`**Analyzed:** ${data.analyzedAt}`);
-
-        return textResult(lines);
+        return textResult(
+          formatScoreReport({
+            packageName: package_name,
+            npms: null,
+            npmsError: is404 ? undefined : errorMessage(npmsRes.error),
+            registryMeta,
+            downloads,
+          })
+        );
       } catch (error) {
         return errorResult(error);
       }
