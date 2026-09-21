@@ -101,6 +101,20 @@ describe("inspectExportsForTypes", () => {
     assert.equal(result.rootEntry, "./index.d.ts");
   });
 
+  it("resolves a types condition that nests import/require targets", () => {
+    const result = inspectExportsForTypes({
+      ".": {
+        types: { import: "./index.d.mts", require: "./index.d.cts" },
+        import: "./index.mjs",
+        require: "./index.cjs",
+      },
+    });
+    assert.equal(result.found, true);
+    assert.equal(result.rootEntry, "./index.d.mts");
+    assert.equal(result.rootCondition, "types");
+    assert.deepEqual(result.misorderedSubpaths, []);
+  });
+
   it("finds nothing when no types condition exists", () => {
     const result = inspectExportsForTypes({
       ".": { import: "./index.mjs", require: "./index.cjs" },

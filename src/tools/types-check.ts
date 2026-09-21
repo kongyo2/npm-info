@@ -42,6 +42,18 @@ function pickTargetString(value: PackageExports | null | undefined): string | un
   return undefined;
 }
 
+function firstTarget(value: PackageExports | null | undefined): string | undefined {
+  const direct = pickTargetString(value);
+  if (direct) return direct;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const item of Object.values(value)) {
+      const nested = firstTarget(item);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
 export function inspectExportsForTypes(
   exports: PackageExports | null | undefined
 ): ExportsTypesFinding {
@@ -65,11 +77,11 @@ export function inspectExportsForTypes(
     const keys = Object.keys(node);
     const firstTypesIdx = keys.findIndex(isTypesConditionKey);
     let misordered = firstTypesIdx > 0;
-    const direct = pickTargetString(node["types"]);
+    const direct = firstTarget(node["types"]);
     if (direct) return { entry: direct, condition: "types", misordered };
     for (const [key, value] of Object.entries(node)) {
       if (key.startsWith("types@")) {
-        const gated = pickTargetString(value);
+        const gated = firstTarget(value);
         if (gated) return { entry: gated, condition: key, misordered };
       }
     }

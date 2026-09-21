@@ -74,12 +74,12 @@ export interface NpmDownloadsResponse {
 
 export interface NpmSearchResult {
   objects: Array<{
-    package: {
+    package?: {
       name: string;
-      version: string;
+      version?: string;
       description?: string;
       keywords?: string[];
-      date: string;
+      date?: string;
       links?: {
         npm?: string;
         homepage?: string;
@@ -90,11 +90,11 @@ export interface NpmSearchResult {
       maintainers?: Array<{ username?: string; email?: string }>;
     };
     score?: {
-      final: number;
+      final?: number;
       detail?: {
-        quality: number;
-        popularity: number;
-        maintenance: number;
+        quality?: number;
+        popularity?: number;
+        maintenance?: number;
       };
     };
     searchScore?: number;

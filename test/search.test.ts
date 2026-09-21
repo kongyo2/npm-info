@@ -63,4 +63,18 @@ describe("formatSearchResults", () => {
     const text = formatSearchResults("q", result).join("\n");
     assert.match(text, /quality=90% popularity=80% maintenance=50%/);
   });
+  it("tolerates sparse hits without crashing or printing NaN", () => {
+    const text = formatSearchResults("q", {
+      total: 3,
+      objects: [
+        { package: undefined },
+        { package: { name: "bare" }, score: { detail: { quality: 0.5 } } },
+        { package: { name: "nan", version: "2.0.0" }, score: { final: Number.NaN } },
+      ],
+    }).join("\n");
+    assert.match(text, /## bare\n/);
+    assert.match(text, /\*\*Score:\*\* quality=50%/);
+    assert.doesNotMatch(text, /NaN|undefined/);
+    assert.doesNotMatch(text, /\*\*Score:\*\*\s*$/m);
+  });
 });

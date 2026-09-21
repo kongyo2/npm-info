@@ -21,6 +21,28 @@ const SearchInputSchema = {
     .describe("Maximum number of results to return (default: 10, max: 30)"),
 };
 
+function pctOf(value: number | undefined): string | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${(value * 100).toFixed(0)}%`
+    : undefined;
+}
+
+function formatScoreLine(
+  score: NpmSearchResult["objects"][number]["score"]
+): string | undefined {
+  if (!score) return undefined;
+  const parts: string[] = [];
+  if (typeof score.final === "number" && Number.isFinite(score.final)) {
+    parts.push(`overall=${score.final.toFixed(1)}`);
+  }
+  const detail = score.detail;
+  for (const key of ["quality", "popularity", "maintenance"] as const) {
+    const pct = pctOf(detail?.[key]);
+    if (pct) parts.push(`${key}=${pct}`);
+  }
+  return parts.length > 0 ? `**Score:** ${parts.join(" ")}` : undefined;
+}
+
 export function formatSearchResults(query: string, result: NpmSearchResult): string[] {
   if (result.total === 0 || result.objects.length === 0) {
     return [`No packages found matching "${query}". Try broader search terms.`];
@@ -35,22 +57,17 @@ export function formatSearchResults(query: string, result: NpmSearchResult): str
 
   for (const obj of result.objects) {
     const pkg = obj.package;
-    lines.push(`## ${pkg.name} (v${pkg.version})`);
+    if (!pkg?.name) continue;
+    lines.push(pkg.version ? `## ${pkg.name} (v${pkg.version})` : `## ${pkg.name}`);
     if (pkg.description) lines.push(`${pkg.description}`);
     lines.push("");
-    if (pkg.keywords?.length) {
+    if (Array.isArray(pkg.keywords) && pkg.keywords.length > 0) {
       lines.push(`**Keywords:** ${pkg.keywords.join(", ")}`);
     }
     if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
     if (pkg.links?.repository) lines.push(`**Repository:** ${pkg.links.repository}`);
-    if (obj.score) {
-      const detail = obj.score.detail;
-      let scoreLine = `**Score:** overall=${obj.score.final.toFixed(1)}`;
-      if (detail) {
-        scoreLine += ` quality=${(detail.quality * 100).toFixed(0)}% popularity=${(detail.popularity * 100).toFixed(0)}% maintenance=${(detail.maintenance * 100).toFixed(0)}%`;
-      }
-      lines.push(scoreLine);
-    }
+    const scoreLine = formatScoreLine(obj.score);
+    if (scoreLine) lines.push(scoreLine);
     if (pkg.date) lines.push(`**Published:** ${pkg.date}`);
     lines.push("");
   }
