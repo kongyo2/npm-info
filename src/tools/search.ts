@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { searchPackages } from "../services/npm-api.js";
 import { DEFAULT_SEARCH_LIMIT } from "../constants.js";
+import type { NpmSearchResult } from "../types.js";
 import { errorResult, textResult } from "./shared.js";
 
 const SearchInputSchema = {
@@ -19,6 +20,49 @@ const SearchInputSchema = {
     .default(DEFAULT_SEARCH_LIMIT)
     .describe("Maximum number of results to return (default: 10, max: 30)"),
 };
+
+/**
+ * Render search results to markdown lines. Exported for tests.
+ * `final` is a relevance number that is no longer normalized to 0-1 by the
+ * registry, so it is rendered raw; the detail metrics are documented as 0-1
+ * fractions.
+ */
+export function formatSearchResults(query: string, result: NpmSearchResult): string[] {
+  if (result.total === 0 || result.objects.length === 0) {
+    return [`No packages found matching "${query}". Try broader search terms.`];
+  }
+
+  const lines: string[] = [
+    `# npm Search Results: "${query}"`,
+    "",
+    `Found ${result.total} packages (showing ${result.objects.length})`,
+    "",
+  ];
+
+  for (const obj of result.objects) {
+    const pkg = obj.package;
+    lines.push(`## ${pkg.name} (v${pkg.version})`);
+    if (pkg.description) lines.push(`${pkg.description}`);
+    lines.push("");
+    if (pkg.keywords?.length) {
+      lines.push(`**Keywords:** ${pkg.keywords.join(", ")}`);
+    }
+    if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
+    if (pkg.links?.repository) lines.push(`**Repository:** ${pkg.links.repository}`);
+    if (obj.score) {
+      const detail = obj.score.detail;
+      let scoreLine = `**Score:** overall=${obj.score.final.toFixed(1)}`;
+      if (detail) {
+        scoreLine += ` quality=${(detail.quality * 100).toFixed(0)}% popularity=${(detail.popularity * 100).toFixed(0)}% maintenance=${(detail.maintenance * 100).toFixed(0)}%`;
+      }
+      lines.push(scoreLine);
+    }
+    if (pkg.date) lines.push(`**Published:** ${pkg.date}`);
+    lines.push("");
+  }
+
+  return lines;
+}
 
 export function registerSearchTool(server: McpServer): void {
   server.registerTool(
@@ -54,47 +98,7 @@ Examples:
     async ({ query, limit }) => {
       try {
         const result = await searchPackages(query, limit);
-
-        if (result.total === 0 || result.objects.length === 0) {
-          return textResult(
-            `No packages found matching "${query}". Try broader search terms.`
-          );
-        }
-
-        const lines: string[] = [
-          `# npm Search Results: "${query}"`,
-          "",
-          `Found ${result.total} packages (showing ${result.objects.length})`,
-          "",
-        ];
-
-        for (const obj of result.objects) {
-          const pkg = obj.package;
-          lines.push(`## ${pkg.name} (v${pkg.version})`);
-          if (pkg.description) lines.push(`${pkg.description}`);
-          lines.push("");
-          if (pkg.keywords?.length) {
-            lines.push(`**Keywords:** ${pkg.keywords.join(", ")}`);
-          }
-          if (pkg.links?.homepage) lines.push(`**Homepage:** ${pkg.links.homepage}`);
-          if (pkg.links?.repository)
-            lines.push(`**Repository:** ${pkg.links.repository}`);
-          // `final` is a relevance number that is no longer normalized to
-          // 0-1 by the registry, so render it raw; the detail metrics are
-          // still documented as 0-1 fractions.
-          if (obj.score) {
-            const detail = obj.score.detail;
-            let scoreLine = `**Score:** overall=${obj.score.final.toFixed(1)}`;
-            if (detail) {
-              scoreLine += ` quality=${(detail.quality * 100).toFixed(0)}% popularity=${(detail.popularity * 100).toFixed(0)}% maintenance=${(detail.maintenance * 100).toFixed(0)}%`;
-            }
-            lines.push(scoreLine);
-          }
-          lines.push(`**Published:** ${pkg.date}`);
-          lines.push("");
-        }
-
-        return textResult(lines);
+        return textResult(formatSearchResults(query, result));
       } catch (error) {
         return errorResult(error);
       }

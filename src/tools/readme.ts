@@ -14,9 +14,22 @@ const NPM_MISSING_README = "ERROR: No README data found!";
 const ReadmeInputSchema = {
   package_name: z
     .string()
+    .trim()
     .min(1, "Package name must not be empty")
     .describe("npm package name"),
 };
+
+/** True when the registry field carries no real README (absent/empty/sentinel). */
+export function isMissingReadme(content: unknown): boolean {
+  return (
+    typeof content !== "string" || content.length === 0 || content === NPM_MISSING_README
+  );
+}
+
+/** Type-narrowing inverse of {@link isMissingReadme}. */
+function hasReadme(content: unknown): content is string {
+  return !isMissingReadme(content);
+}
 
 export function registerReadmeTool(server: McpServer): void {
   server.registerTool(
@@ -51,7 +64,7 @@ Examples:
         let readmeContent = metadata.readme;
         let source = "npm";
 
-        if (!readmeContent || readmeContent === NPM_MISSING_README) {
+        if (!hasReadme(readmeContent)) {
           const ghRepo = extractGitHubRepo(metadata.repository);
           if (ghRepo) {
             const ghReadme = await fetchGitHubReadme(
@@ -66,7 +79,7 @@ Examples:
           }
         }
 
-        if (!readmeContent || readmeContent === NPM_MISSING_README) {
+        if (!hasReadme(readmeContent)) {
           return textResult(
             `No README found for "${package_name}". Check the package's repository or homepage for documentation.`
           );
