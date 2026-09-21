@@ -111,6 +111,22 @@ describe("extractGitHubRepo", () => {
     assert.equal(extractGitHubRepo(undefined), null);
     assert.equal(extractGitHubRepo({ type: "git" }), null);
   });
+
+  it("tolerates non-string url and directory values", () => {
+    assert.equal(
+      extractGitHubRepo({
+        url: 42,
+      } as unknown as Parameters<typeof extractGitHubRepo>[0]),
+      null
+    );
+    assert.deepEqual(
+      extractGitHubRepo({
+        url: "https://github.com/a/b.git",
+        directory: { path: "x" },
+      } as unknown as Parameters<typeof extractGitHubRepo>[0]),
+      { owner: "a", repo: "b" }
+    );
+  });
 });
 
 function jsonResponse(

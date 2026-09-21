@@ -294,7 +294,7 @@ export function extractGitHubRepo(
 
   const repoObj = typeof repository === "string" ? null : repository;
   const url = typeof repository === "string" ? repository : repository.url;
-  if (!url) return null;
+  if (typeof url !== "string" || !url) return null;
 
   const shorthandMatch = url.match(/^github:([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
   const match =
@@ -308,7 +308,7 @@ export function extractGitHubRepo(
     owner: match[1],
     repo: match[2],
   };
-  if (repoObj?.directory) {
+  if (typeof repoObj?.directory === "string") {
     result.directory = repoObj.directory;
   }
   return result;
