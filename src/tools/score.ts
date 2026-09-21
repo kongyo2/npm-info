@@ -145,7 +145,9 @@ export function formatScoreReport(input: ScoreReportInput): string[] {
       for (const window of collectedDownloads) {
         const days = windowDays(window.from, window.to);
         const label =
-          days === null ? `${window.from} – ${window.to}` : `Last ${days} days`;
+          days === null
+            ? `${window.from} – ${window.to}`
+            : `Last ${days} day${days === 1 ? "" : "s"}`;
         lines.push(`- **${label}:** ${num(window.count)}`);
       }
       lines.push("");
